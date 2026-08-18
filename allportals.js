@@ -395,12 +395,9 @@ app.get('/admin', async (req, res) => {
     const scheduleRes = await pool.query(`SELECT * FROM work_schedules LIMIT 1`);
     const schedule = scheduleRes.rows[0] || { full_day_hours: 9, half_day_hours: 5 };
 
-    // Calculate basic salary preview for active workers
     let salaryData = [];
     for (let w of workers.rows) {
-      // Fetch attendance logs for worker
       const att = await pool.query(`SELECT * FROM attendance_logs WHERE worker_id = $1 ORDER BY attendance_date ASC, attendance_time ASC`, [w.worker_id]);
-      // Calculate full days and half days based on completed pairs per date
       let logsByDate = {};
       att.rows.forEach(l => {
         let dStr = l.attendance_date.toISOString().split('T')[0];
@@ -420,7 +417,7 @@ app.get('/admin', async (req, res) => {
             let t1 = new Date(`1970-01-01T${dayLogs[i].attendance_time}`);
             let t2 = new Date(`1970-01-01T${dayLogs[i+1].attendance_time}`);
             let diffHours = (t2 - t1) / (1000 * 60 * 60);
-            if (diffHours > 4) diffHours -= 1; // deduct lunch break 12-1 if spanned
+            if (diffHours > 4) diffHours -= 1;
             if (diffHours > 0) totalHours += diffHours;
             i += 2;
           } else {
@@ -437,7 +434,6 @@ app.get('/admin', async (req, res) => {
       let equivalentDays = fullDays + (halfDays * 0.5);
       let totalSalary = equivalentDays * parseFloat(w.daily_rate);
 
-      // Fetch advances
       const advRes = await pool.query(`SELECT SUM(amount) as total FROM advance_money WHERE worker_id = $1`, [w.worker_id]);
       let totalAdvance = parseFloat(advRes.rows[0].total || 0);
       let netSalary = totalSalary - totalAdvance;
@@ -588,7 +584,6 @@ app.get('/admin/worker/new', async (req, res) => {
 
 app.post('/admin/worker/save', async (req, res) => {
   const { full_name, position, contact_number, daily_rate, assigned_project, profile_picture } = req.body;
-  // Generate Worker ID e.g. W-0001
   const countRes = await pool.query('SELECT COUNT(*) FROM workers');
   const nextIdNum = parseInt(countRes.rows[0].count) + 1;
   const worker_id = `W-${String(nextIdNum).padStart(4, '0')}`;
@@ -1051,13 +1046,10 @@ app.get('/scanner', async (req, res) => {
             { facingMode: "environment" },
             { fps: 10, qrbox: 250 },
             async (decodedText) => {
-              // Successfully scanned QR code (contains worker_id e.g. W-0001)
               stopScanner();
               await processAttendance(decodedText, currentMode);
             },
-            (errorMessage) => {
-              // scanning error / scanning in progress
-            }
+            (errorMessage) => {}
           ).catch(err => {
             alert('Unable to start camera: ' + err);
             document.getElementById('scanner-container').style.display = 'none';
@@ -1099,7 +1091,6 @@ app.get('/scanner', async (req, res) => {
             } else {
               resDiv.innerHTML = \`<div class="alert alert-danger"><strong>ERROR:</strong> \${result.message}</div>\`;
             }
-            // Auto reset for next scan after 3 seconds
             setTimeout(() => {
               resDiv.innerHTML = '';
             }, 4000);
@@ -1267,7 +1258,6 @@ app.post('/scanner/stock/out', async (req, res) => {
 app.post('/api/attendance/scan', async (req, res) => {
   const { worker_id, attendance_type } = req.body;
   
-  // Validate worker exists and is active
   const workerRes = await pool.query("SELECT * FROM workers WHERE worker_id = $1 AND status = 'Active'", [worker_id]);
   if (workerRes.rows.length === 0) {
     return res.json({ success: false, message: 'Worker not found or inactive.' });
@@ -1278,7 +1268,6 @@ app.post('/api/attendance/scan', async (req, res) => {
   const currentDate = now.toISOString().split('T')[0];
   const currentTime = now.toTimeString().split(' ')[0];
 
-  // Fetch today's last attendance record for this worker to validate sequence (IN -> OUT -> IN -> OUT)
   const lastLogRes = await pool.query(
     'SELECT * FROM attendance_logs WHERE worker_id = $1 AND attendance_date = $2 ORDER BY attendance_time DESC LIMIT 1',
     [worker_id, currentDate]
@@ -1286,12 +1275,10 @@ app.post('/api/attendance/scan', async (req, res) => {
   const lastLog = lastLogRes.rows[0];
 
   if (!lastLog) {
-    // First record of the day MUST be IN
     if (attendance_type !== 'IN') {
       return res.json({ success: false, message: 'Cannot record TIME OUT as the first attendance.' });
     }
   } else {
-    // Validate sequence rule: Cannot have two consecutive IN or OUT
     if (lastLog.attendance_type === 'IN' && attendance_type === 'IN') {
       return res.json({ success: false, message: 'Cannot record two consecutive TIME IN records.' });
     }
@@ -1300,7 +1287,6 @@ app.post('/api/attendance/scan', async (req, res) => {
     }
   }
 
-  // Save Attendance Log
   await pool.query(
     'INSERT INTO attendance_logs (worker_id, attendance_date, attendance_time, attendance_type) VALUES ($1, $2, $3, $4)',
     [worker_id, currentDate, currentTime, attendance_type]
@@ -1315,8 +1301,8 @@ app.post('/api/attendance/scan', async (req, res) => {
   });
 });
 
-// Start Server
+// Start Server bound explicitly to 0.0.0.0 for Render
 const PORT_NUM = process.env.PORT || 3000;
-app.listen(PORT_NUM, () => {
+app.listen(PORT_NUM, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT_NUM}`);
 });
