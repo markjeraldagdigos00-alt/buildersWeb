@@ -96,6 +96,17 @@ async function ensureTables() {
       );
     `);
 
+    // SAFE ALTER MIGRATIONS (Para masiguro na meron ang mga columns kahit lumang database pa ito)
+    await pool.query(`
+      ALTER TABLE attendance ADD COLUMN IF NOT EXISTS time_in_1 TIMESTAMP;
+      ALTER TABLE attendance ADD COLUMN IF NOT EXISTS time_out_1 TIMESTAMP;
+      ALTER TABLE attendance ADD COLUMN IF NOT EXISTS time_in_2 TIMESTAMP;
+      ALTER TABLE attendance ADD COLUMN IF NOT EXISTS time_out_2 TIMESTAMP;
+      ALTER TABLE attendance ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'Present';
+      ALTER TABLE workers ADD COLUMN IF NOT EXISTS assigned_project VARCHAR(100);
+      ALTER TABLE workers ADD COLUMN IF NOT EXISTS profile_pic TEXT DEFAULT '';
+    `);
+
     const compCheck = await pool.query('SELECT * FROM company_settings LIMIT 1');
     if (compCheck.rows.length === 0) {
       await pool.query(`INSERT INTO company_settings (company_name, address, contact_number) VALUES ('ABC Builders', 'Angeles City', '09123456789')`);
@@ -110,7 +121,7 @@ async function ensureTables() {
       `);
     }
 
-    console.log('Database tables successfully verified and ready!');
+    console.log('Database tables & columns successfully verified and fixed!');
   } catch (err) {
     console.error('DB Setup Error:', err.message);
   }
@@ -130,13 +141,17 @@ async function getCompanyInfo() {
 app.get('/api/settings', async (req, res) => res.json(await getCompanyInfo()));
 app.post('/api/settings', async (req, res) => {
   const { company_name, logo_url, address, contact_number } = req.body;
-  await pool.query('UPDATE company_settings SET company_name = $1, logo_url = $2, address = $3, contact_number = $4 WHERE id = 1', [company_name, logo_url, address, contact_number]);
+  await pool.query('UPDATE company_settings SET company_name = $1, logo_url = $2, address = $3, contact_number = $4 WHERE id = 1', [company_name, logo_url, address || '', contact_number || '']);
   res.json({ success: true });
 });
 
 app.get('/api/workers', async (req, res) => {
-  const result = await pool.query('SELECT * FROM workers ORDER BY id DESC');
-  res.json(result.rows);
+  try {
+    const result = await pool.query('SELECT * FROM workers ORDER BY id DESC');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/workers', async (req, res) => {
@@ -155,7 +170,7 @@ app.post('/api/workers', async (req, res) => {
   }
 });
 
-// ================= INVENTORY & STOCK IN/OUT API (LIGTAS SA ERROR) =================
+// ================= INVENTORY & STOCK IN/OUT API =================
 app.get('/api/inventory', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM inventory ORDER BY id DESC');
@@ -165,7 +180,6 @@ app.get('/api/inventory', async (req, res) => {
   }
 });
 
-// Endpoint para makuha ang Stock In/Out Logs (Report ng mga pumasok at lumabas na item)
 app.get('/api/inventory/logs', async (req, res) => {
   try {
     const result = await pool.query(`
@@ -428,7 +442,7 @@ app.get('/api/worker/:id', async (req, res) => {
   }
 });
 
-// ================= ADMIN PORTAL ( /admin ) - WITH COMPLETE STOCK IN/OUT & REPORTS =================
+// ================= ADMIN PORTAL ( /admin ) =================
 app.get('/admin', async (req, res) => {
   const company = await getCompanyInfo();
   res.send(`
@@ -634,7 +648,6 @@ app.get('/admin', async (req, res) => {
 
         async function loadInventory() {
           try {
-            // Load Items Dropdown & Table
             const res = await fetch('/api/inventory'); const data = await res.json();
             const tbody = document.getElementById('inventory-table'); const select = document.getElementById('inv-item');
             tbody.innerHTML = ''; select.innerHTML = '<option value="">Pumili ng Item...</option>';
@@ -643,7 +656,6 @@ app.get('/admin', async (req, res) => {
               select.innerHTML += '<option value="' + i.item_code + '">' + i.item_name + ' (Stock: ' + i.stock_qty + ' ' + i.unit + ')</option>';
             });
 
-            // Load Inventory Logs / Reports (Stock In / Stock Out History)
             const logsRes = await fetch('/api/inventory/logs'); const logsData = await logsRes.json();
             const logsTbody = document.getElementById('inventory-logs-table');
             logsTbody.innerHTML = '';
@@ -707,7 +719,7 @@ app.get('/admin', async (req, res) => {
 
         async function addWorker(e) {
           e.preventDefault();
-          const body = { worker_id: document.getElementById('wid').value, full_name: document.getElementById('wname').value, position: document.getElementById('wpos').value, contact_number: document.getElementById('wcontact').value, daily_rate: document.getElementById('wrate').value, assigned_project: document.getElementById('wproject').value };
+          const body = { worker_id: document.getElementById('wid').value, full_name: document.getElementById('wname'].value, position: document.getElementById('wpos').value, contact_number: document.getElementById('wcontact').value, daily_rate: document.getElementById('wrate').value, assigned_project: document.getElementById('wproject').value };
           const res = await fetch('/api/workers', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
           if(res.ok) { alert('Worker saved!'); loadWorkers(); document.getElementById('worker-form').reset(); }
         }
