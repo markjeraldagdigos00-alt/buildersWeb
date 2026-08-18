@@ -230,34 +230,40 @@ app.post('/api/announcements', async (req, res) => {
   res.json({ success: true });
 });
 
+// WORKER PORTAL API ENDPOINT (FIXED)
 app.get('/api/worker/:id', async (req, res) => {
-  const workerId = req.params.id;
+  const workerId = req.params.id.trim();
   const company = await getCompanyInfo();
-  const workerRes = await pool.query('SELECT * FROM workers WHERE worker_id = $1', [workerId]);
-  if (workerRes.rows.length === 0) return res.status(404).json({ error: 'Worker ID not found' });
   
-  const worker = workerRes.rows[0];
-  const today = new Date().toISOString().split('T')[0];
-  const todayAtt = await pool.query('SELECT * FROM attendance WHERE worker_id = $1 AND date = $2', [workerId, today]);
-  const attendanceHistory = await pool.query('SELECT * FROM attendance WHERE worker_id = $1 ORDER BY date DESC LIMIT 30', [workerId]);
-  const advances = await pool.query('SELECT SUM(amount) as total FROM advances WHERE worker_id = $1 AND status = $2', [workerId, 'Unpaid']);
-  const annRes = await pool.query('SELECT * FROM announcements ORDER BY id DESC LIMIT 5');
+  try {
+    const workerRes = await pool.query('SELECT * FROM workers WHERE worker_id ILIKE $1 OR qr_code ILIKE $1', [workerId]);
+    if (workerRes.rows.length === 0) return res.status(404).json({ error: 'Worker ID not found. Pakisuri ang iyong ID.' });
+    
+    const worker = workerRes.rows[0];
+    const today = new Date().toISOString().split('T')[0];
+    const todayAtt = await pool.query('SELECT * FROM attendance WHERE worker_id = $1 AND date = $2', [worker.worker_id, today]);
+    const attendanceHistory = await pool.query('SELECT * FROM attendance WHERE worker_id = $1 ORDER BY date DESC LIMIT 30', [worker.worker_id]);
+    const advances = await pool.query('SELECT SUM(amount) as total FROM advances WHERE worker_id = $1 AND status = $2', [worker.worker_id, 'Unpaid']);
+    const annRes = await pool.query('SELECT * FROM announcements ORDER BY id DESC LIMIT 5');
 
-  const daysWorkedRes = await pool.query('SELECT COUNT(*) FROM attendance WHERE worker_id = $1 AND time_in IS NOT NULL', [workerId]);
-  const daysWorked = parseInt(daysWorkedRes.rows[0].count) || 0;
-  const dailyRate = parseFloat(worker.daily_rate);
-  const totalSalary = daysWorked * dailyRate;
-  const totalAdvance = parseFloat(advances.rows[0].total || 0);
-  const netSalary = totalSalary - totalAdvance;
+    const daysWorkedRes = await pool.query('SELECT COUNT(*) FROM attendance WHERE worker_id = $1 AND time_in IS NOT NULL', [worker.worker_id]);
+    const daysWorked = parseInt(daysWorkedRes.rows[0].count) || 0;
+    const dailyRate = parseFloat(worker.daily_rate) || 0;
+    const totalSalary = daysWorked * dailyRate;
+    const totalAdvance = parseFloat(advances.rows[0].total || 0);
+    const netSalary = totalSalary - totalAdvance;
 
-  res.json({
-    company,
-    worker,
-    today_attendance: todayAtt.rows[0] || null,
-    attendance: attendanceHistory.rows,
-    salary: { daily_rate: dailyRate, days_worked: daysWorked, total_salary: totalSalary, advance: totalAdvance, net_salary: netSalary },
-    announcements: annRes.rows
-  });
+    res.json({
+      company,
+      worker,
+      today_attendance: todayAtt.rows[0] || null,
+      attendance: attendanceHistory.rows,
+      salary: { daily_rate: dailyRate, days_worked: daysWorked, total_salary: totalSalary, advance: totalAdvance, net_salary: netSalary },
+      announcements: annRes.rows
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
 });
 
 
@@ -632,11 +638,13 @@ app.get('/worker', async (req, res) => {
         async function checkWorker() {
           const id = document.getElementById('worker-id-input').value.trim();
           if(!id) return;
+          const box = document.getElementById('worker-dashboard');
+          box.classList.remove('hidden');
+          box.innerHTML = '<div class="text-center text-slate-400">Naglo-load...</div>';
+          
           try {
-            const res = await fetch('/api/worker/' + id);
+            const res = await fetch('/api/worker/' + encodeURIComponent(id));
             const data = await res.json();
-            const box = document.getElementById('worker-dashboard');
-            box.classList.remove('hidden');
             if(res.ok) {
               let attStatus = '<span class="text-red-400 font-bold">WALA PA / ABSENT</span>';
               if(data.today_attendance) {
@@ -657,9 +665,11 @@ app.get('/worker', async (req, res) => {
                 '<div class="text-center pt-1"><p class="text-[10px] text-slate-400 mb-1">QR CODE ID:</p><div class="bg-white p-2 inline-block rounded text-slate-900 font-mono font-black text-sm tracking-widest">' + data.worker.qr_code + '</div></div>' +
                 annHTML;
             } else {
-              box.innerHTML = '<div class="text-red-400 font-bold text-center">' + data.error + '</div>';
+              box.innerHTML = '<div class="text-red-400 font-bold text-center">' + (data.error || 'Hindi makita ang worker.') + '</div>';
             }
-          } catch(err) {}
+          } catch(err) {
+            box.innerHTML = '<div class="text-red-400 font-bold text-center">May problema sa koneksyon. Subukang muli.</div>';
+          }
         }
       </script>
     </body>
