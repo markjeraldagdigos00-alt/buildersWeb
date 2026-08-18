@@ -41,8 +41,10 @@ async function ensureTables() {
         id SERIAL PRIMARY KEY,
         worker_id VARCHAR(50) NOT NULL,
         date DATE DEFAULT CURRENT_DATE,
-        time_in TIMESTAMP,
-        time_out TIMESTAMP,
+        time_in_am TIMESTAMP,
+        time_out_am TIMESTAMP,
+        time_in_pm TIMESTAMP,
+        time_out_pm TIMESTAMP,
         status VARCHAR(20) DEFAULT 'Present'
       );
 
@@ -193,20 +195,21 @@ app.get('/api/scanner/dashboard', async (req, res) => {
   const today = new Date().toISOString().split('T')[0];
   const company = await getCompanyInfo();
   const presentRes = await pool.query('SELECT COUNT(DISTINCT worker_id) as count FROM attendance WHERE date = $1', [today]);
-  const timeInRes = await pool.query('SELECT COUNT(*) as count FROM attendance WHERE date = $1 AND time_in IS NOT NULL', [today]);
-  const timeOutRes = await pool.query('SELECT COUNT(*) as count FROM attendance WHERE date = $1 AND time_out IS NOT NULL', [today]);
+  const timeInAmRes = await pool.query('SELECT COUNT(*) as count FROM attendance WHERE date = $1 AND time_in_am IS NOT NULL', [today]);
+  const timeOutPmRes = await pool.query('SELECT COUNT(*) as count FROM attendance WHERE date = $1 AND time_out_pm IS NOT NULL', [today]);
 
   res.json({
     company,
     date: today,
     total_present: parseInt(presentRes.rows[0].count) || 0,
-    total_time_in: parseInt(timeInRes.rows[0].count) || 0,
-    total_time_out: parseInt(timeOutRes.rows[0].count) || 0
+    total_time_in: parseInt(timeInAmRes.rows[0].count) || 0,
+    total_time_out: parseInt(timeOutPmRes.rows[0].count) || 0
   });
 });
 
+// 4-TIME SCAN SYSTEM LOGIC
 app.post('/api/scanner/scan', async (req, res) => {
-  const { qr_code, status_override } = req.body; // Pwedeng magpasa ng 'Present' o 'Half Day'
+  const { qr_code, scan_type, attendance_status } = req.body; // scan_type: 'time_in_am', 'time_out_am', 'time_in_pm', 'time_out_pm'
   const today = new Date().toISOString().split('T')[0];
 
   const workerRes = await pool.query('SELECT * FROM workers WHERE qr_code = $1 OR worker_id = $1', [qr_code]);
@@ -216,20 +219,37 @@ app.post('/api/scanner/scan', async (req, res) => {
   const attRes = await pool.query('SELECT * FROM attendance WHERE worker_id = $1 AND date = $2', [worker.worker_id, today]);
   const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-  let attendanceStatus = status_override || 'Present';
+  let attStatus = attendance_status || 'Present';
 
   if (attRes.rows.length === 0) {
-    await pool.query('INSERT INTO attendance (worker_id, date, time_in, status) VALUES ($1, $2, NOW(), $3)', [worker.worker_id, today, attendanceStatus]);
-    res.json({ success: true, status_type: 'TIME IN (' + attendanceStatus + ')', name: worker.full_name, position: worker.position, time: currentTime });
-  } else if (!attRes.rows[0].time_out) {
-    await pool.query('UPDATE attendance SET time_out = NOW() WHERE id = $1', [attRes.rows[0].id]);
-    res.json({ success: true, status_type: 'TIME OUT', name: worker.full_name, position: worker.position, time: currentTime });
+    // Kung wala pang record ngayon, gawa ng bagong row para sa araw na ito
+    let queryFields = 'worker_id, date, status';
+    let queryValues = '$1, $2, $3';
+    let queryParams = [worker.worker_id, today, attStatus];
+
+    if (scan_type === 'time_in_am') { queryFields += ', time_in_am'; queryValues += ', NOW()'; }
+    else if (scan_type === 'time_out_am') { queryFields += ', time_out_am'; queryValues += ', NOW()'; }
+    else if (scan_type === 'time_in_pm') { queryFields += ', time_in_pm'; queryValues += ', NOW()'; }
+    else if (scan_type === 'time_out_pm') { queryFields += ', time_out_pm'; queryValues += ', NOW()'; }
+
+    await pool.query(`INSERT INTO attendance (${queryFields}) VALUES (${queryValues})`, queryParams);
+    res.json({ success: true, status_type: scan_type.toUpperCase().replace('_', ' '), name: worker.full_name, position: worker.position, time: currentTime });
   } else {
-    res.status(400).json({ error: `${worker.full_name} ay nakapag-Time In at Time Out na ngayong araw.` });
+    // Kung mayroon nang record, i-update lang kung aling time slot ang pinili
+    const attId = attRes.rows[0].id;
+    let updateColumn = '';
+
+    if (scan_type === 'time_in_am') updateColumn = 'time_in_am';
+    else if (scan_type === 'time_out_am') updateColumn = 'time_out_am';
+    else if (scan_type === 'time_in_pm') updateColumn = 'time_in_pm';
+    else if (scan_type === 'time_out_pm') updateColumn = 'time_out_pm';
+
+    await pool.query(`UPDATE attendance SET ${updateColumn} = NOW(), status = $1 WHERE id = $2`, [attStatus, attId]);
+    res.json({ success: true, status_type: scan_type.toUpperCase().replace('_', ' '), name: worker.full_name, position: worker.position, time: currentTime });
   }
 });
 
-// Admin manual attendance update (para ma-edit o gawing Half Day)
+// Admin manual attendance update
 app.post('/api/admin/attendance/update', async (req, res) => {
   const { attendance_id, status } = req.body;
   try {
@@ -379,14 +399,13 @@ app.post('/api/leave-requests', async (req, res) => {
   }
 });
 
-// Payroll na kinakalkula ang Present (1 day) at Half Day (0.5 day)
+// Payroll computation based on Present or Half Day status
 app.get('/api/admin/payroll-list', async (req, res) => {
   try {
     const workers = await pool.query('SELECT * FROM workers ORDER BY id DESC');
     const payrollData = [];
     for (let w of workers.rows) {
-      // Kunin ang attendance records para sa worker na ito na hindi pa bayad
-      const attRes = await pool.query("SELECT status FROM attendance WHERE worker_id = $1 AND time_in IS NOT NULL AND status != 'Paid'", [w.worker_id]);
+      const attRes = await pool.query("SELECT status FROM attendance WHERE worker_id = $1 AND (time_in_am IS NOT NULL OR time_in_pm IS NOT NULL) AND status != 'Paid'", [w.worker_id]);
       
       let effectiveDays = 0;
       attRes.rows.forEach(att => {
@@ -446,7 +465,7 @@ app.get('/api/worker/:id', async (req, res) => {
     const annRes = await pool.query('SELECT * FROM announcements ORDER BY id DESC LIMIT 5');
     const leavesRes = await pool.query('SELECT * FROM leave_requests WHERE worker_id = $1 ORDER BY id DESC', [worker.worker_id]);
 
-    const attRes = await pool.query("SELECT status FROM attendance WHERE worker_id = $1 AND time_in IS NOT NULL AND status != 'Paid'", [worker.worker_id]);
+    const attRes = await pool.query("SELECT status FROM attendance WHERE worker_id = $1 AND (time_in_am IS NOT NULL OR time_in_pm IS NOT NULL) AND status != 'Paid'", [worker.worker_id]);
     let effectiveDays = 0;
     attRes.rows.forEach(att => {
       if (att.status === 'Present') effectiveDays += 1;
@@ -481,7 +500,7 @@ app.get('/', async (req, res) => {
     <html lang="tl">
     <head>
       <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>${company.company_name} - Scanner & Stock Portal</title>
+      <title>${company.company_name} - 4-Time Scanner Portal</title>
       <script src="https://cdn.tailwindcss.com"></script>
       <script src="https://unpkg.com/html5-qrcode"></script>
     </head>
@@ -491,13 +510,13 @@ app.get('/', async (req, res) => {
           ${company.logo_url ? `<img src="${company.logo_url}" class="w-7 h-7 rounded-full object-cover border border-amber-400">` : '🏗️'}
           <div>
             <h1 class="text-xs sm:text-sm font-bold text-amber-400">${company.company_name}</h1>
-            <p class="text-[9px] text-slate-400">Gate & Stock Scanner</p>
+            <p class="text-[9px] text-slate-400">4-Time Gate Scanner</p>
           </div>
         </div>
         <div class="space-x-1 text-xs">
           <button onclick="switchTab('dashboard')" class="bg-slate-700 px-2 py-1.5 rounded-lg font-semibold">Dash</button>
           <button onclick="switchTab('scan')" class="bg-amber-500 text-slate-900 font-bold px-2 py-1.5 rounded-lg">Scan QR</button>
-          <button onclick="switchTab('stock')" class="bg-purple-600 px-2 py-1.5 rounded-lg font-bold">Stock In/Out</button>
+          <button onclick="switchTab('stock')" class="bg-purple-600 px-2 py-1.5 rounded-lg font-bold">Stock</button>
         </div>
       </nav>
       <main class="flex-1 max-w-lg w-full mx-auto p-3 mt-2">
@@ -508,21 +527,38 @@ app.get('/', async (req, res) => {
           </div>
           <div class="grid grid-cols-3 gap-2 text-center">
             <div class="bg-slate-800 p-3 rounded-xl border border-slate-700"><p class="text-[10px] text-slate-400">Present</p><h3 id="d-present" class="text-xl font-bold text-emerald-400 mt-1">0</h3></div>
-            <div class="bg-slate-800 p-3 rounded-xl border border-slate-700"><p class="text-[10px] text-slate-400">Time In</p><h3 id="d-timein" class="text-xl font-bold text-blue-400 mt-1">0</h3></div>
-            <div class="bg-slate-800 p-3 rounded-xl border border-slate-700"><p class="text-[10px] text-slate-400">Time Out</p><h3 id="d-timeout" class="text-xl font-bold text-purple-400 mt-1">0</h3></div>
+            <div class="bg-slate-800 p-3 rounded-xl border border-slate-700"><p class="text-[10px] text-slate-400">Time In (AM)</p><h3 id="d-timein" class="text-xl font-bold text-blue-400 mt-1">0</h3></div>
+            <div class="bg-slate-800 p-3 rounded-xl border border-slate-700"><p class="text-[10px] text-slate-400">Time Out (PM)</p><h3 id="d-timeout" class="text-xl font-bold text-purple-400 mt-1">0</h3></div>
           </div>
         </section>
 
         <section id="tab-scan" class="hidden bg-slate-800 p-4 rounded-2xl text-center space-y-3 border border-slate-700 shadow-xl">
-          <h2 class="text-base font-bold text-amber-400">SCAN WORKER QR CODE</h2>
-          <div class="flex justify-center gap-3 text-xs mb-2">
-            <label class="flex items-center gap-1 cursor-pointer font-bold text-emerald-400">
-              <input type="radio" name="scan-status" value="Present" checked class="accent-amber-500"> Full Day
+          <h2 class="text-base font-bold text-amber-400">PILIIN ANG URI NG SCAN (4-TIME)</h2>
+          
+          <div class="grid grid-cols-2 gap-2 text-xs mb-2 bg-slate-900/60 p-2 rounded-xl border border-slate-700">
+            <label class="flex items-center gap-1.5 cursor-pointer font-bold text-blue-400 justify-center bg-slate-800 p-2 rounded border border-slate-600">
+              <input type="radio" name="scan-type" value="time_in_am" checked class="accent-amber-500"> ☀️ In (Umaga)
             </label>
-            <label class="flex items-center gap-1 cursor-pointer font-bold text-amber-300">
-              <input type="radio" name="scan-status" value="Half Day" class="accent-amber-500"> Half Day
+            <label class="flex items-center gap-1.5 cursor-pointer font-bold text-amber-400 justify-center bg-slate-800 p-2 rounded border border-slate-600">
+              <input type="radio" name="scan-type" value="time_out_am" class="accent-amber-500"> 🍽️ Out (Tanghali)
+            </label>
+            <label class="flex items-center gap-1.5 cursor-pointer font-bold text-purple-400 justify-center bg-slate-800 p-2 rounded border border-slate-600">
+              <input type="radio" name="scan-type" value="time_in_pm" class="accent-amber-500"> ⛅ In (Hapon)
+            </label>
+            <label class="flex items-center gap-1.5 cursor-pointer font-bold text-emerald-400 justify-center bg-slate-800 p-2 rounded border border-slate-600">
+              <input type="radio" name="scan-type" value="time_out_pm" class="accent-amber-500"> 🌙 Out (Uwian)
             </label>
           </div>
+
+          <div class="flex justify-center gap-3 text-xs mb-2">
+            <label class="flex items-center gap-1 cursor-pointer font-bold text-slate-300">
+              <input type="radio" name="att-status" value="Present" checked class="accent-amber-500"> Full Day
+            </label>
+            <label class="flex items-center gap-1 cursor-pointer font-bold text-amber-300">
+              <input type="radio" name="att-status" value="Half Day" class="accent-amber-500"> Half Day
+            </label>
+          </div>
+
           <div id="reader" class="overflow-hidden rounded-xl bg-black border-2 border-amber-500 mx-auto w-full max-w-xs"></div>
           <div class="flex gap-2 max-w-xs mx-auto">
             <input type="text" id="manual-qr" placeholder="O i-type ID (e.g. W-001)" class="bg-slate-700 border border-slate-600 p-2 rounded-lg w-full text-center text-white font-bold uppercase text-xs">
@@ -587,11 +623,12 @@ app.get('/', async (req, res) => {
         }
         async function processScan(code) {
           if (!code) return;
-          const statusOverride = document.querySelector('input[name="scan-status"]:checked').value;
+          const scanType = document.querySelector('input[name="scan-type"]:checked').value;
+          const attStatus = document.querySelector('input[name="att-status"]:checked').value;
           const box = document.getElementById('scan-result');
           box.classList.remove('hidden', 'bg-emerald-900', 'bg-red-900', 'text-emerald-200', 'text-red-200');
           try {
-            const res = await fetch('/api/scanner/scan', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({qr_code: code.trim(), status_override: statusOverride}) });
+            const res = await fetch('/api/scanner/scan', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({qr_code: code.trim(), scan_type: scanType, attendance_status: attStatus}) });
             const data = await res.json();
             if(res.ok) {
               box.classList.add('bg-emerald-900', 'text-emerald-200');
@@ -677,7 +714,7 @@ app.get('/admin', async (req, res) => {
         <nav class="space-y-1 text-xs font-semibold overflow-x-auto md:overflow-y-auto max-h-[75vh] flex md:block gap-2 md:gap-0 pb-2">
           <button onclick="switchAdminTab('dash')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 bg-amber-500 text-slate-900 font-bold">🏠 Dashboard</button>
           <button onclick="switchAdminTab('workers')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">👷 Workers</button>
-          <button onclick="switchAdminTab('qr')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">📱 QR Attendance</button>
+          <button onclick="switchAdminTab('qr')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">📱 4-Time Attendance</button>
           <button onclick="switchAdminTab('payroll')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">💰 Payroll</button>
           <button onclick="switchAdminTab('advance')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">💵 Cash Advance</button>
           <button onclick="switchAdminTab('stock')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">📦 Stock In/Out</button>
@@ -722,9 +759,20 @@ app.get('/admin', async (req, res) => {
         </section>
 
         <section id="adm-qr" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
-          <h2 class="text-sm font-bold text-amber-400">📱 QR Attendance Logs & Status Editor</h2>
+          <h2 class="text-sm font-bold text-amber-400">📱 4-Time Attendance Logs</h2>
           <div class="overflow-x-auto"><table class="w-full text-left text-xs">
-            <thead><tr class="bg-slate-700 text-slate-300 border-b border-slate-600"><th class="p-2">Worker Name</th><th class="p-2">Date</th><th class="p-2">Time In</th><th class="p-2">Time Out</th><th class="p-2">Status</th><th class="p-2">Change Status</th></tr></thead>
+            <thead>
+              <tr class="bg-slate-700 text-slate-300 border-b border-slate-600">
+                <th class="p-2">Worker Name</th>
+                <th class="p-2">Date</th>
+                <th class="p-2">In (AM)</th>
+                <th class="p-2">Out (AM)</th>
+                <th class="p-2">In (PM)</th>
+                <th class="p-2">Out (PM)</th>
+                <th class="p-2">Status</th>
+                <th class="p-2">Action</th>
+              </tr>
+            </thead>
             <tbody id="attendance-table" class="divide-y divide-slate-700"></tbody>
           </table></div>
         </section>
@@ -732,17 +780,16 @@ app.get('/admin', async (req, res) => {
         <section id="adm-payroll" class="hidden space-y-4">
           <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3" id="printable-payroll">
             <div class="flex justify-between items-center">
-              <h2 class="text-sm font-bold text-amber-400">💰 Payroll Processing & Salary Reset</h2>
-              <button onclick="window.print()" class="bg-emerald-600 hover:bg-emerald-500 font-bold px-3 py-1.5 rounded text-xs no-print">🖨️ Print / Save Payroll</button>
+              <h2 class="text-sm font-bold text-amber-400">💰 Payroll Processing</h2>
+              <button onclick="window.print()" class="bg-emerald-600 hover:bg-emerald-500 font-bold px-3 py-1.5 rounded text-xs no-print">🖨️ Print Payroll</button>
             </div>
-            <p class="text-xs text-slate-400 no-print">Note: Ang Half Day ay awtomatikong kinakalkula bilang kalahati (0.5) ng Daily Rate.</p>
             <div class="overflow-x-auto">
               <table class="w-full text-left text-xs">
                 <thead>
                   <tr class="bg-slate-700 text-slate-300 border-b border-slate-600">
                     <th class="p-2">Worker ID</th>
                     <th class="p-2">Name</th>
-                    <th class="p-2">Equivalent Days</th>
+                    <th class="p-2">Days Worked</th>
                     <th class="p-2">Total Salary</th>
                     <th class="p-2">Advance</th>
                     <th class="p-2 text-emerald-400">Net Salary</th>
@@ -776,29 +823,27 @@ app.get('/admin', async (req, res) => {
 
         <section id="adm-stock" class="hidden space-y-4">
           <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
-            <h2 class="text-sm font-bold text-purple-400">📦 Add New Equipment / Material Inventory</h2>
+            <h2 class="text-sm font-bold text-purple-400">📦 Add Equipment Inventory</h2>
             <form onsubmit="addEquipment(event)" class="grid grid-cols-1 md:grid-cols-4 gap-2 text-xs">
-              <input type="text" id="eq-code" placeholder="Item Code (e.g. MAT-01)" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white">
-              <input type="text" id="eq-name" placeholder="Item Name (e.g. Cement)" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white">
+              <input type="text" id="eq-code" placeholder="Item Code" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white">
+              <input type="text" id="eq-name" placeholder="Item Name" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white">
               <input type="text" id="eq-category" placeholder="Category" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white">
-              <input type="number" id="eq-qty" placeholder="Initial Quantity" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white">
-              <button type="submit" class="bg-purple-600 hover:bg-purple-500 font-bold p-2 rounded col-span-full">Save Item to Inventory</button>
+              <input type="number" id="eq-qty" placeholder="Quantity" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white">
+              <button type="submit" class="bg-purple-600 hover:bg-purple-500 font-bold p-2 rounded col-span-full">Save Item</button>
             </form>
           </div>
-
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
               <h2 class="text-sm font-bold text-amber-400">Inventory Items List</h2>
               <div class="overflow-x-auto max-h-64"><table class="w-full text-left text-xs">
-                <thead><tr class="bg-slate-700 text-slate-300 border-b border-slate-600"><th class="p-2">Code</th><th class="p-2">Name</th><th class="p-2">Category</th><th class="p-2">Qty</th></tr></thead>
+                <thead><tr class="bg-slate-700 text-slate-300 border-b border-slate-600"><th class="p-2">Code</th><th class="p-2">Name</th><th class="p-2">Qty</th></tr></thead>
                 <tbody id="equipment-table" class="divide-y divide-slate-700"></tbody>
               </table></div>
             </div>
-
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
-              <h2 class="text-sm font-bold text-amber-400">Stock In / Out Logs History</h2>
+              <h2 class="text-sm font-bold text-amber-400">Stock Logs</h2>
               <div class="overflow-x-auto max-h-64"><table class="w-full text-left text-xs">
-                <thead><tr class="bg-slate-700 text-slate-300 border-b border-slate-600"><th class="p-2">Item</th><th class="p-2">Action</th><th class="p-2">Qty</th><th class="p-2">By</th></tr></thead>
+                <thead><tr class="bg-slate-700 text-slate-300 border-b border-slate-600"><th class="p-2">Item</th><th class="p-2">Action</th><th class="p-2">Qty</th></tr></thead>
                 <tbody id="stock-logs-table" class="divide-y divide-slate-700"></tbody>
               </table></div>
             </div>
@@ -806,35 +851,24 @@ app.get('/admin', async (req, res) => {
         </section>
 
         <section id="adm-leave" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
-          <h2 class="text-sm font-bold text-amber-400">📝 Leave Requests Management</h2>
-          <div class="overflow-x-auto">
-            <table class="w-full text-left text-xs">
-              <thead>
-                <tr class="bg-slate-700 text-slate-300 border-b border-slate-600">
-                  <th class="p-2">Worker</th>
-                  <th class="p-2">Leave Type</th>
-                  <th class="p-2">Start Date</th>
-                  <th class="p-2">End Date</th>
-                  <th class="p-2">Reason</th>
-                  <th class="p-2">Status</th>
-                </tr>
-              </thead>
-              <tbody id="admin-leave-table" class="divide-y divide-slate-700"></tbody>
-            </table>
-          </div>
+          <h2 class="text-sm font-bold text-amber-400">📝 Leave Requests</h2>
+          <div class="overflow-x-auto"><table class="w-full text-left text-xs">
+            <thead><tr class="bg-slate-700 text-slate-300 border-b border-slate-600"><th class="p-2">Worker</th><th class="p-2">Type</th><th class="p-2">Dates</th><th class="p-2">Status</th></tr></thead>
+            <tbody id="admin-leave-table" class="divide-y divide-slate-700"></tbody>
+          </table></div>
         </section>
 
         <section id="adm-announce" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
-          <h2 class="text-sm font-bold text-amber-400">📢 Post Announcements</h2>
+          <h2 class="text-sm font-bold text-amber-400">📢 Announcements</h2>
           <form onsubmit="postAnnouncement(event)" class="space-y-2">
             <input type="text" id="ann-title" placeholder="Title" required class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white text-xs">
-            <textarea id="ann-msg" placeholder="Message for workers..." required class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white text-xs"></textarea>
-            <button type="submit" class="bg-blue-600 hover:bg-blue-500 font-bold p-2 rounded w-full text-xs">Publish Announcement</button>
+            <textarea id="ann-msg" placeholder="Message..." required class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white text-xs"></textarea>
+            <button type="submit" class="bg-blue-600 hover:bg-blue-500 font-bold p-2 rounded w-full text-xs">Publish</button>
           </form>
         </section>
 
         <section id="adm-settings" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
-          <h2 class="text-sm font-bold text-amber-400">⚙️ Company Settings</h2>
+          <h2 class="text-sm font-bold text-amber-400">⚙️ Settings</h2>
           <form onsubmit="saveSettings(event)" class="space-y-2">
             <div><label class="text-[10px] text-slate-400">Company Name</label><input type="text" id="set-name" value="${company.company_name}" required class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white text-xs"></div>
             <div><label class="text-[10px] text-slate-400">Logo URL</label><input type="text" id="set-logo" value="${company.logo_url}" class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white text-xs"></div>
@@ -899,7 +933,6 @@ app.get('/admin', async (req, res) => {
           e.preventDefault();
           const btn = document.getElementById('save-worker-btn');
           btn.disabled = true; btn.innerText = 'Saving...';
-          
           const body = {
             worker_id: document.getElementById('wid').value.trim(),
             full_name: document.getElementById('wname').value.trim(),
@@ -908,16 +941,10 @@ app.get('/admin', async (req, res) => {
             daily_rate: document.getElementById('wrate').value.trim(),
             assigned_project: document.getElementById('wproject').value.trim()
           };
-
           try {
             const res = await fetch('/api/workers', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
-            const result = await res.json();
-            if(res.ok) {
-              alert('Worker successfully saved!');
-              document.getElementById('worker-form').reset();
-              loadWorkers();
-            } else { alert('Error: ' + result.error); }
-          } catch(err) { alert('Network error.'); }
+            if(res.ok) { alert('Worker saved!'); document.getElementById('worker-form').reset(); loadWorkers(); }
+          } catch(err) { alert('Error.'); }
           finally { btn.disabled = false; btn.innerText = 'Save Worker & Generate QR'; }
         }
 
@@ -930,12 +957,14 @@ app.get('/admin', async (req, res) => {
                 <tr>
                   <td class="p-2 font-semibold">\${a.full_name}</td>
                   <td class="p-2">\${a.date}</td>
-                  <td class="p-2 text-blue-400">\${a.time_in ? new Date(a.time_in).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '-'}</td>
-                  <td class="p-2 text-purple-400">\${a.time_out ? new Date(a.time_out).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—'}</td>
-                  <td class="p-2 text-emerald-400 font-bold">\${a.status}</td>
+                  <td class="p-2 text-blue-400">\${a.time_in_am ? new Date(a.time_in_am).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '-'}</td>
+                  <td class="p-2 text-amber-400">\${a.time_out_am ? new Date(a.time_out_am).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '-'}</td>
+                  <td class="p-2 text-purple-400">\${a.time_in_pm ? new Date(a.time_in_pm).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '-'}</td>
+                  <td class="p-2 text-emerald-400">\${a.time_out_pm ? new Date(a.time_out_pm).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '-'}</td>
+                  <td class="p-2 font-bold">\${a.status}</td>
                   <td class="p-2">
                     <select onchange="updateAttendanceStatus(\${a.id}, this.value)" class="bg-slate-700 text-xs p-1 rounded text-white">
-                      <option value="">Palitan ang Status...</option>
+                      <option value="">Baguhin...</option>
                       <option value="Present">Present</option>
                       <option value="Half Day">Half Day</option>
                     </select>
@@ -954,13 +983,8 @@ app.get('/admin', async (req, res) => {
               headers: {'Content-Type': 'application/json'},
               body: JSON.stringify({ attendance_id: attendanceId, status: statusVal })
             });
-            if(res.ok) {
-              alert('Attendance status updated to ' + statusVal);
-              loadAttendance();
-            } else {
-              alert('Error updating status.');
-            }
-          } catch(err) { alert('Network error.'); }
+            if(res.ok) { alert('Updated to ' + statusVal); loadAttendance(); }
+          } catch(err) {}
         }
 
         async function loadPayroll() {
@@ -969,21 +993,17 @@ app.get('/admin', async (req, res) => {
             const data = await res.json();
             const tbody = document.getElementById('payroll-table');
             tbody.innerHTML = '';
-            if(data.length === 0) {
-              tbody.innerHTML = '<tr><td colspan="7" class="p-3 text-center text-slate-400">Walang record ng payroll.</td></tr>';
-              return;
-            }
             data.forEach(p => {
               tbody.innerHTML += \`
                 <tr>
                   <td class="p-2 font-bold text-amber-300">\${p.worker_id}</td>
                   <td class="p-2">\${p.full_name}</td>
-                  <td class="p-2">\${p.days_worked} days (Equiv)</td>
+                  <td class="p-2">\${p.days_worked} days</td>
                   <td class="p-2">₱\${p.total_salary.toLocaleString()}</td>
                   <td class="p-2 text-red-400">₱\${p.advance.toLocaleString()}</td>
                   <td class="p-2 text-emerald-400 font-bold">₱\${p.net_salary.toLocaleString()}</td>
                   <td class="p-2 no-print">
-                    <button onclick="payAndReset('\${p.worker_id}', \${p.net_salary})" class="bg-blue-600 hover:bg-blue-500 text-white px-2 py-1 rounded text-[10px] font-bold">Pay & Reset to 0</button>
+                    <button onclick="payAndReset('\${p.worker_id}', \${p.net_salary})" class="bg-blue-600 text-white px-2 py-1 rounded text-[10px] font-bold">Pay & Reset</button>
                   </td>
                 </tr>
               \`;
@@ -992,22 +1012,15 @@ app.get('/admin', async (req, res) => {
         }
 
         async function payAndReset(workerId, netSalary) {
-          if(!confirm('Sigurado ka bang nabigyan na ng sahod si ' + workerId + ' at gusto mong i-reset ang balanse sa 0?')) return;
+          if(!confirm('I-clear at i-reset ang balanse?')) return;
           try {
             const res = await fetch('/api/admin/pay-worker', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
               body: JSON.stringify({ worker_id: workerId, amount_paid: netSalary })
             });
-            if(res.ok) {
-              alert('Sahod ay nai-rehistro na at ang balanse ay na-reset na sa 0.');
-              loadPayroll();
-            } else {
-              alert('May error sa pag-process.');
-            }
-          } catch(err) {
-            alert('Koneksyon error.');
-          }
+            if(res.ok) { alert('Paid successfully!'); loadPayroll(); }
+          } catch(err) {}
         }
 
         async function loadAdvances() {
@@ -1015,7 +1028,7 @@ app.get('/admin', async (req, res) => {
             const res = await fetch('/api/advances'); const data = await res.json();
             const tbody = document.getElementById('advance-table'); tbody.innerHTML = '';
             data.forEach(adv => {
-              tbody.innerHTML += '<tr><td class="p-2 font-semibold">' + adv.full_name + '</td><td class="p-2 text-purple-400 font-bold">₱' + adv.amount + '</td><td class="p-2 text-slate-300">' + (adv.reason || '—') + '</td><td class="p-2">' + adv.status + '</td><td class="p-2">' + adv.date + '</td></tr>';
+              tbody.innerHTML += '<tr><td class="p-2">' + adv.full_name + '</td><td class="p-2 text-purple-400">₱' + adv.amount + '</td><td class="p-2">' + (adv.reason || '—') + '</td><td class="p-2">' + adv.status + '</td><td class="p-2">' + adv.date + '</td></tr>';
             });
           } catch(err) {}
         }
@@ -1025,14 +1038,12 @@ app.get('/admin', async (req, res) => {
             const eqRes = await fetch('/api/equipment'); const eqData = await eqRes.json();
             const eqTbody = document.getElementById('equipment-table'); eqTbody.innerHTML = '';
             eqData.forEach(e => {
-              eqTbody.innerHTML += '<tr><td class="p-2 font-bold text-purple-300">' + e.item_code + '</td><td class="p-2">' + e.item_name + '</td><td class="p-2 text-slate-300">' + e.category + '</td><td class="p-2 font-bold text-amber-400">' + e.quantity + '</td></tr>';
+              eqTbody.innerHTML += '<tr><td class="p-2">' + e.item_code + '</td><td class="p-2">' + e.item_name + '</td><td class="p-2">' + e.quantity + '</td></tr>';
             });
-
             const logRes = await fetch('/api/stock/logs'); const logData = await logRes.json();
             const logTbody = document.getElementById('stock-logs-table'); logTbody.innerHTML = '';
             logData.forEach(l => {
-              const badge = l.action_type === 'STOCK IN' ? '<span class="text-emerald-400 font-bold">IN</span>' : '<span class="text-red-400 font-bold">OUT</span>';
-              logTbody.innerHTML += '<tr><td class="p-2">' + l.item_name + '</td><td class="p-2">' + badge + '</td><td class="p-2 font-bold">' + l.quantity + '</td><td class="p-2 text-slate-300">' + l.personnel + '</td></tr>';
+              logTbody.innerHTML += '<tr><td class="p-2">' + l.item_name + '</td><td class="p-2">' + l.action_type + '</td><td class="p-2">' + l.quantity + '</td></tr>';
             });
           } catch(err) {}
         }
@@ -1040,29 +1051,21 @@ app.get('/admin', async (req, res) => {
         async function addEquipment(e) {
           e.preventDefault();
           const body = {
-            item_code: document.getElementById('eq-code').value.trim(),
-            item_name: document.getElementById('eq-name').value.trim(),
-            category: document.getElementById('eq-category').value.trim(),
-            quantity: document.getElementById('eq-qty').value.trim()
+            item_code: document.getElementById('eq-code').value,
+            item_name: document.getElementById('eq-name').value,
+            category: document.getElementById('eq-category').value,
+            quantity: document.getElementById('eq-qty').value
           };
           const res = await fetch('/api/equipment', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
-          if(res.ok) {
-            alert('Equipment/Material added successfully!');
-            document.getElementById('eq-code').value=''; document.getElementById('eq-name').value=''; document.getElementById('eq-category').value=''; document.getElementById('eq-qty').value='';
-            loadStockManagement();
-          }
+          if(res.ok) { alert('Added!'); loadStockManagement(); }
         }
 
         async function loadAdminLeaves() {
           try {
             const res = await fetch('/api/leave-requests'); const data = await res.json();
             const tbody = document.getElementById('admin-leave-table'); tbody.innerHTML = '';
-            if(data.length === 0) {
-              tbody.innerHTML = '<tr><td colspan="6" class="p-3 text-center text-slate-400">Walang leave requests.</td></tr>';
-              return;
-            }
             data.forEach(l => {
-              tbody.innerHTML += '<tr><td class="p-2 font-semibold">' + l.full_name + '</td><td class="p-2 text-amber-300">' + l.leave_type + '</td><td class="p-2">' + l.start_date + '</td><td class="p-2">' + l.end_date + '</td><td class="p-2 text-slate-300">' + (l.reason || '—') + '</td><td class="p-2 text-blue-400 font-bold">' + l.status + '</td></tr>';
+              tbody.innerHTML += '<tr><td class="p-2">' + l.full_name + '</td><td class="p-2">' + l.leave_type + '</td><td class="p-2">' + l.start_date + ' to ' + l.end_date + '</td><td class="p-2">' + l.status + '</td></tr>';
             });
           } catch(err) {}
         }
@@ -1071,21 +1074,21 @@ app.get('/admin', async (req, res) => {
           e.preventDefault();
           const body = { worker_id: document.getElementById('adv-worker').value, amount: document.getElementById('adv-amount').value, reason: document.getElementById('adv-reason').value };
           const res = await fetch('/api/advances', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
-          if(res.ok) { alert('Advance Recorded!'); loadAdvances(); }
+          if(res.ok) { alert('Recorded!'); loadAdvances(); }
         }
 
         async function postAnnouncement(e) {
           e.preventDefault();
           const body = { title: document.getElementById('ann-title').value, message: document.getElementById('ann-msg').value };
           const res = await fetch('/api/announcements', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
-          if(res.ok) { alert('Announcement Posted!'); document.getElementById('ann-title').value=''; document.getElementById('ann-msg').value=''; }
+          if(res.ok) { alert('Posted!'); }
         }
 
         async function saveSettings(e) {
           e.preventDefault();
           const body = { company_name: document.getElementById('set-name').value, logo_url: document.getElementById('set-logo').value, address: document.getElementById('set-address').value, contact_number: document.getElementById('set-contact').value };
           const res = await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
-          if(res.ok) { alert('Settings Updated!'); location.reload(); }
+          if(res.ok) { alert('Updated!'); location.reload(); }
         }
 
         loadDashboardStats();
@@ -1113,21 +1116,20 @@ app.get('/worker', async (req, res) => {
         <div id="login-screen" class="space-y-3 text-center">
           ${company.logo_url ? `<img src="${company.logo_url}" class="w-12 h-12 rounded-full object-cover mx-auto border-2 border-purple-400">` : '👷'}
           <h1 class="text-base font-bold text-purple-400">${company.company_name}</h1>
-          <p class="text-[10px] text-slate-400 tracking-wider">ILAGAY ANG WORKER ID</p>
+          <p class="text-[10px] text-slate-400">ILAGAY ANG WORKER ID</p>
           <div class="flex gap-2">
             <input type="text" id="worker-id-input" placeholder="e.g. W-001" class="bg-slate-700 border border-slate-600 p-2.5 rounded-lg w-full text-center font-bold uppercase text-white text-xs">
-            <button onclick="checkWorker()" class="bg-purple-600 hover:bg-purple-500 px-4 rounded-lg font-bold text-xs">Login</button>
+            <button onclick="checkWorker()" class="bg-purple-600 px-4 rounded-lg font-bold text-xs">Login</button>
           </div>
           <div id="login-error" class="text-red-400 text-xs font-bold hidden"></div>
         </div>
 
         <div id="worker-dashboard" class="hidden space-y-4">
-          
           <div class="text-center pb-3 border-b border-slate-700 flex items-center justify-between">
             <div class="flex items-center gap-2 text-left">
               ${company.logo_url ? `<img src="${company.logo_url}" class="w-8 h-8 rounded-full object-cover border border-purple-400">` : '🏗️'}
               <div>
-                <h2 id="w-comp-name" class="font-bold text-amber-400 text-xs">${company.company_name}</h2>
+                <h2 class="font-bold text-amber-400 text-xs">${company.company_name}</h2>
                 <p id="w-pos-id" class="text-[10px] text-slate-400">-</p>
               </div>
             </div>
@@ -1138,8 +1140,8 @@ app.get('/worker', async (req, res) => {
 
           <div id="tab-home" class="worker-tab space-y-3">
             <div class="bg-slate-700/50 p-4 rounded-xl border border-slate-600 text-center space-y-2">
-              <div class="text-xs text-slate-400 font-semibold uppercase">Today's Attendance Status</div>
-              <div id="w-today-status" class="text-base font-extrabold text-red-400">WALA PA / ABSENT</div>
+              <div class="text-xs text-slate-400 font-semibold uppercase">Today's Attendance (4-Time Logs)</div>
+              <div id="w-today-status" class="text-xs font-bold text-slate-300">Wala pang record ngayong araw.</div>
             </div>
           </div>
 
@@ -1152,20 +1154,20 @@ app.get('/worker', async (req, res) => {
           </div>
 
           <div id="tab-attendance" class="worker-tab hidden space-y-2">
-            <div class="text-xs font-bold text-purple-400 uppercase">Attendance History</div>
+            <div class="text-xs font-bold text-purple-400 uppercase">Attendance Logs History</div>
             <div class="overflow-x-auto max-h-48">
               <table class="w-full text-left text-[11px]">
-                <thead><tr class="bg-slate-700 text-slate-300 border-b border-slate-600"><th class="p-1.5">Date</th><th class="p-1.5">In</th><th class="p-1.5">Out</th><th class="p-1.5">Status</th></tr></thead>
+                <thead><tr class="bg-slate-700 text-slate-300 border-b border-slate-600"><th class="p-1">Date</th><th class="p-1">In(AM)</th><th class="p-1">Out(AM)</th><th class="p-1">In(PM)</th><th class="p-1">Out(PM)</th></tr></thead>
                 <tbody id="w-attendance-table" class="divide-y divide-slate-700"></tbody>
               </table>
             </div>
           </div>
 
           <div id="tab-advance" class="worker-tab hidden space-y-2">
-            <div class="text-xs font-bold text-purple-400 uppercase">Advances / Cash Advance</div>
+            <div class="text-xs font-bold text-purple-400 uppercase">Cash Advance</div>
             <div class="overflow-x-auto max-h-48">
               <table class="w-full text-left text-[11px]">
-                <thead><tr class="bg-slate-700 text-slate-300 border-b border-slate-600"><th class="p-1.5">Date</th><th class="p-1.5">Amount</th><th class="p-1.5">Reason</th><th class="p-1.5">Status</th></tr></thead>
+                <thead><tr class="bg-slate-700 text-slate-300 border-b border-slate-600"><th class="p-1.5">Date</th><th class="p-1.5">Amount</th><th class="p-1.5">Status</th></tr></thead>
                 <tbody id="w-advance-table" class="divide-y divide-slate-700"></tbody>
               </table>
             </div>
@@ -1175,7 +1177,7 @@ app.get('/worker', async (req, res) => {
             <div class="text-xs font-bold text-purple-400 uppercase">Salary Breakdown</div>
             <div class="bg-slate-700/50 p-3 rounded-xl border border-slate-600 space-y-1.5 text-xs">
               <div class="flex justify-between"><span>Daily Rate:</span> <span id="s-rate" class="font-bold">₱0</span></div>
-              <div class="flex justify-between"><span>Equivalent Days Worked:</span> <span id="s-days" class="font-bold">0 days</span></div>
+              <div class="flex justify-between"><span>Days Worked:</span> <span id="s-days" class="font-bold">0 days</span></div>
               <div class="flex justify-between border-t border-slate-600 pt-1"><span>Total Salary:</span> <span id="s-total" class="font-bold text-amber-400">₱0</span></div>
               <div class="flex justify-between"><span>Advance Deducted:</span> <span id="s-advance" class="font-bold text-red-400">₱0</span></div>
               <div class="flex justify-between border-t border-slate-600 pt-1 font-extrabold text-sm text-emerald-400"><span>Net Salary:</span> <span id="s-net">₱0</span></div>
@@ -1185,7 +1187,7 @@ app.get('/worker', async (req, res) => {
           <div id="tab-leave" class="worker-tab hidden space-y-3">
             <div class="flex justify-between items-center">
               <div class="text-xs font-bold text-purple-400 uppercase">Leave Requests</div>
-              <button onclick="openLeaveModal()" class="bg-purple-600 hover:bg-purple-500 px-2.5 py-1 rounded text-xs font-bold">+ Request Leave</button>
+              <button onclick="openLeaveModal()" class="bg-purple-600 px-2.5 py-1 rounded text-xs font-bold">+ Request</button>
             </div>
             <div class="overflow-x-auto max-h-40">
               <table class="w-full text-left text-[11px]">
@@ -1209,7 +1211,6 @@ app.get('/worker', async (req, res) => {
             <button onclick="switchWorkerTab('leave')" class="worker-nav-btn bg-slate-700 text-slate-300 p-1.5 rounded text-center">📝<br>Leave</button>
             <button onclick="logoutWorker()" class="bg-red-900/60 text-red-300 p-1.5 rounded text-center font-bold">🚪<br>Exit</button>
           </div>
-
         </div>
       </div>
 
@@ -1217,41 +1218,20 @@ app.get('/worker', async (req, res) => {
         <div class="bg-slate-800 p-4 rounded-xl max-w-xs w-full border border-slate-700 space-y-3">
           <h3 class="font-bold text-amber-400 text-sm">File Leave Request</h3>
           <form onsubmit="submitLeave(event)" class="space-y-2 text-xs">
-            <div>
-              <label class="text-slate-400 text-[10px]">Leave Type</label>
-              <select id="leave-type" class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white">
-                <option value="Vacation Leave">Vacation Leave</option>
-                <option value="Sick Leave">Sick Leave</option>
-                <option value="Emergency Leave">Emergency Leave</option>
-              </select>
-            </div>
-            <div>
-              <label class="text-slate-400 text-[10px]">Start Date</label>
-              <input type="date" id="leave-start" required class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white">
-            </div>
-            <div>
-              <label class="text-slate-400 text-[10px]">End Date</label>
-              <input type="date" id="leave-end" required class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white">
-            </div>
-            <div>
-              <label class="text-slate-400 text-[10px]">Reason</label>
-              <textarea id="leave-reason" placeholder="Dahilan ng leave..." class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white"></textarea>
-            </div>
-            <div class="flex gap-2 pt-1">
-              <button type="button" onclick="closeLeaveModal()" class="bg-slate-600 hover:bg-slate-500 p-2 rounded w-full font-bold">Cancel</button>
-              <button type="submit" class="bg-purple-600 hover:bg-purple-500 p-2 rounded w-full font-bold">Submit</button>
-            </div>
+            <div><label class="text-slate-400 text-[10px]">Type</label><select id="leave-type" class="bg-slate-700 p-2 rounded w-full text-white"><option value="Vacation Leave">Vacation Leave</option><option value="Sick Leave">Sick Leave</option></select></div>
+            <div><label class="text-slate-400 text-[10px]">Start Date</label><input type="date" id="leave-start" required class="bg-slate-700 p-2 rounded w-full text-white"></div>
+            <div><label class="text-slate-400 text-[10px]">End Date</label><input type="date" id="leave-end" required class="bg-slate-700 p-2 rounded w-full text-white"></div>
+            <div><label class="text-slate-400 text-[10px]">Reason</label><textarea id="leave-reason" class="bg-slate-700 p-2 rounded w-full text-white"></textarea></div>
+            <div class="flex gap-2 pt-1"><button type="button" onclick="closeLeaveModal()" class="bg-slate-600 p-2 rounded w-full font-bold">Cancel</button><button type="submit" class="bg-purple-600 p-2 rounded w-full font-bold">Submit</button></div>
           </form>
         </div>
       </div>
 
       <script>
         let globalWorkerData = null;
-
         function switchWorkerTab(tabName) {
           document.querySelectorAll('.worker-tab').forEach(el => el.classList.add('hidden'));
           document.getElementById('tab-' + tabName).classList.remove('hidden');
-          
           document.querySelectorAll('.worker-nav-btn').forEach(btn => {
             btn.classList.remove('bg-purple-600', 'text-white');
             btn.classList.add('bg-slate-700', 'text-slate-300');
@@ -1259,7 +1239,6 @@ app.get('/worker', async (req, res) => {
           event.currentTarget.classList.remove('bg-slate-700', 'text-slate-300');
           event.currentTarget.classList.add('bg-purple-600', 'text-white');
         }
-
         function openLeaveModal() { document.getElementById('leave-modal').classList.remove('hidden'); }
         function closeLeaveModal() { document.getElementById('leave-modal').classList.add('hidden'); }
 
@@ -1273,22 +1252,8 @@ app.get('/worker', async (req, res) => {
             end_date: document.getElementById('leave-end').value,
             reason: document.getElementById('leave-reason').value
           };
-          try {
-            const res = await fetch('/api/leave-requests', {
-              method: 'POST',
-              headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify(body)
-            });
-            if(res.ok) {
-              alert('Leave request successfully submitted!');
-              closeLeaveModal();
-              checkWorker();
-            } else {
-              alert('Error submitting leave.');
-            }
-          } catch(err) {
-            alert('Network error.');
-          }
+          const res = await fetch('/api/leave-requests', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+          if(res.ok) { alert('Submitted!'); closeLeaveModal(); checkWorker(); }
         }
 
         async function checkWorker() {
@@ -1296,7 +1261,6 @@ app.get('/worker', async (req, res) => {
           const errBox = document.getElementById('login-error');
           if(!id) return;
           errBox.classList.add('hidden');
-          
           try {
             const res = await fetch('/api/worker/' + encodeURIComponent(id));
             const data = await res.json();
@@ -1308,50 +1272,47 @@ app.get('/worker', async (req, res) => {
               document.getElementById('w-name').innerText = data.worker.full_name;
               document.getElementById('w-pos-id').innerText = data.worker.position + ' | ID: ' + data.worker.worker_id;
               
-              let attStatusHTML = '<span class="text-red-400">WALA PA / ABSENT</span>';
+              let todayHtml = '<span class="text-slate-400">Wala pang record ngayong araw.</span>';
               if(data.today_attendance) {
-                let timeInStr = new Date(data.today_attendance.time_in).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-                attStatusHTML = '<span class="text-emerald-400">' + data.today_attendance.status.toUpperCase() + '</span><br><span class="text-xs text-slate-300">Time In: ' + timeInStr + '</span>';
+                let ta = data.today_attendance;
+                let amIn = ta.time_in_am ? new Date(ta.time_in_am).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—';
+                let amOut = ta.time_out_am ? new Date(ta.time_out_am).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—';
+                let pmIn = ta.time_in_pm ? new Date(ta.time_in_pm).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—';
+                let pmOut = ta.time_out_pm ? new Date(ta.time_out_pm).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—';
+                todayHtml = \`<div class="text-xs grid grid-cols-2 gap-2 text-left bg-slate-900/50 p-2 rounded">
+                  <div>☀️ In (AM): <b class="text-blue-400">\${amIn}</b></div>
+                  <div>🍽️ Out (AM): <b class="text-amber-400">\${amOut}</b></div>
+                  <div>⛅ In (PM): <b class="text-purple-400">\${pmIn}</b></div>
+                  <div>🌙 Out (PM): <b class="text-emerald-400">\${pmOut}</b></div>
+                </div>\`;
               }
-              document.getElementById('w-today-status').innerHTML = attStatusHTML;
+              document.getElementById('w-today-status').innerHTML = todayHtml;
 
               document.getElementById('w-qr-text').innerText = data.worker.qr_code;
               document.getElementById('qrcode').innerHTML = '';
-              new QRCode(document.getElementById("qrcode"), {
-                text: data.worker.qr_code,
-                width: 128,
-                height: 128
-              });
+              new QRCode(document.getElementById("qrcode"), { text: data.worker.qr_code, width: 128, height: 128 });
 
               const attTbody = document.getElementById('w-attendance-table');
               attTbody.innerHTML = '';
-              if(data.attendance.length === 0) {
-                attTbody.innerHTML = '<tr><td colspan="4" class="p-2 text-center text-slate-400">Walang attendance history.</td></tr>';
-              } else {
-                data.attendance.forEach(att => {
-                  attTbody.innerHTML += '<tr><td class="p-1.5">' + att.date + '</td><td class="p-1.5 text-blue-400">' + (att.time_in ? new Date(att.time_in).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '-') + '</td><td class="p-1.5 text-purple-400">' + (att.time_out ? new Date(att.time_out).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—') + '</td><td class="p-1.5 text-emerald-400">' + att.status + '</td></tr>';
-                });
-              }
+              data.attendance.forEach(att => {
+                let amIn = att.time_in_am ? new Date(att.time_in_am).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—';
+                let amOut = att.time_out_am ? new Date(att.time_out_am).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—';
+                let pmIn = att.time_in_pm ? new Date(att.time_in_pm).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—';
+                let pmOut = att.time_out_pm ? new Date(att.time_out_pm).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—';
+                attTbody.innerHTML += '<tr><td class="p-1">' + att.date + '</td><td class="p-1 text-blue-400">' + amIn + '</td><td class="p-1 text-amber-400">' + amOut + '</td><td class="p-1 text-purple-400">' + pmIn + '</td><td class="p-1 text-emerald-400">' + pmOut + '</td></tr>';
+              });
 
               const advTbody = document.getElementById('w-advance-table');
               advTbody.innerHTML = '';
-              if(data.advances.length === 0) {
-                advTbody.innerHTML = '<tr><td colspan="4" class="p-2 text-center text-slate-400">Walang cash advance history.</td></tr>';
-              } else {
-                data.advances.forEach(adv => {
-                  advTbody.innerHTML += '<tr><td class="p-1.5">' + adv.date + '</td><td class="p-1.5 text-purple-400 font-bold">₱' + adv.amount + '</td><td class="p-1.5 text-slate-300">' + (adv.reason || '—') + '</td><td class="p-1.5">' + adv.status + '</td></tr>';
-                });
-              }
+              data.advances.forEach(adv => {
+                advTbody.innerHTML += '<tr><td class="p-1.5">' + adv.date + '</td><td class="p-1.5 text-purple-400">₱' + adv.amount + '</td><td class="p-1.5">' + adv.status + '</td></tr>';
+              });
 
               const leaveTbody = document.getElementById('w-leave-table');
               leaveTbody.innerHTML = '';
-              if(data.leave_requests.length === 0) {
-                leaveTbody.innerHTML = '<tr><td colspan="3" class="p-2 text-center text-slate-400">Walang leave requests.</td></tr>';
-              } else {
-                data.leave_requests.forEach(l => {
-                  leaveTbody.innerHTML += '<tr><td class="p-1.5 text-amber-300">' + l.leave_type + '</td><td class="p-1.5">' + l.start_date + ' to ' + l.end_date + '</td><td class="p-1.5 text-blue-400 font-bold">' + l.status + '</td></tr>';
-                });
-              }
+              data.leave_requests.forEach(l => {
+                leaveTbody.innerHTML += '<tr><td class="p-1.5">' + l.leave_type + '</td><td class="p-1.5">' + l.start_date + '</td><td class="p-1.5">' + l.status + '</td></tr>';
+              });
 
               document.getElementById('s-rate').innerText = '₱' + data.salary.daily_rate.toLocaleString();
               document.getElementById('s-days').innerText = data.salary.days_worked + ' days';
@@ -1360,15 +1321,10 @@ app.get('/worker', async (req, res) => {
               document.getElementById('s-net').innerText = '₱' + data.salary.net_salary.toLocaleString();
 
               const annList = document.getElementById('w-announcements-list');
-              annList.innerHTML = '</div>';
-              if(data.announcements.length === 0) {
-                annList.innerHTML = '<div class="text-center text-slate-400 text-xs">Walang announcements.</div>';
-              } else {
-                data.announcements.forEach(ann => {
-                  annList.innerHTML += '<div class="p-2 bg-slate-700/60 rounded border border-slate-600"><div class="font-bold text-amber-400 text-xs">📢 ' + ann.title + '</div><div class="text-[11px] text-slate-300 mt-0.5">' + ann.message + '</div></div>';
-                });
-              }
-
+              annList.innerHTML = '';
+              data.announcements.forEach(ann => {
+                annList.innerHTML += '<div class="p-2 bg-slate-700/60 rounded border border-slate-600"><div class="font-bold text-amber-400 text-xs">📢 ' + ann.title + '</div><div class="text-[11px] text-slate-300">' + ann.message + '</div></div>';
+              });
             } else {
               errBox.innerText = data.error || 'Hindi makita ang worker.';
               errBox.classList.remove('hidden');
