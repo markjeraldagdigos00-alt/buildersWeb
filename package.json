@@ -2,9 +2,9 @@
   "name": "construction-worker-management-system",
   "version": "1.0.0",
   "description": "Complete Construction Worker Management System",
-  "main": "allportals.js",
+  "main": "server.js",
   "scripts": {
-    "start": "node allportals.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
