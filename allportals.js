@@ -152,7 +152,6 @@ function requireRole(role) {
 
 // Helper: Calculate attendance details
 function calculateWorkingHours(logs) {
-  // logs should be sorted by time ascending
   if (!logs || logs.length === 0) return { totalHours: 0, status: 'ABSENT', firstIn: '-', firstOut: '-', secondIn: '-', finalOut: '-' };
   
   let totalMinutes = 0;
@@ -163,8 +162,8 @@ function calculateWorkingHours(logs) {
   let finalOut = '-';
   let pairCount = 0;
 
-  logs.forEach((log, index) => {
-    const timeStr = log.time; // HH:MM:SS
+  logs.forEach((log) => {
+    const timeStr = log.time; 
     const [h, m] = timeStr.split(':').map(Number);
     const minutes = h * 60 + m;
 
@@ -642,11 +641,8 @@ app.post('/admin/workers/register', isAuthenticated, requireRole('ADMIN'), async
     );
     const userId = userRes.rows[0].id;
 
-    // Generate Unique Worker ID
     const countRes = await pool.query('SELECT COUNT(*) FROM workers');
     const workerId = `W-${String(parseInt(countRes.rows[0].count) + 1).padStart(3, '0')}`;
-
-    // Generate QR Code data URL
     const qrDataUrl = await QRCode.toDataURL(workerId);
 
     await pool.query(
@@ -862,7 +858,6 @@ app.get('/admin/salary', isAuthenticated, requireRole('ADMIN'), async (req, res)
 
   const salaryData = workers.rows.map(w => {
     const wLogs = logsByWorker[w.worker_id] || [];
-    // Group logs by date
     const byDate = {};
     wLogs.forEach(l => {
       const d = l.date.toISOString().split('T')[0];
@@ -1376,8 +1371,8 @@ app.get('/scanner/scan', isAuthenticated, requireRole('SCANNER'), async (req, re
       
       <div id="selection-box" class="space-y-4 mb-6">
         <div class="grid grid-cols-2 gap-4">
-          <button onclick="setType('IN')" id="btn-in" class="py-4 border-4 border-gray-300 bg-gray-50 text-gray-700 font-bold text-xl rounded-xl transition">TIME IN</button>
-          <button onclick="setType('OUT')" id="btn-out" class="py-4 border-4 border-gray-300 bg-gray-50 text-gray-700 font-bold text-xl rounded-xl transition">TIME OUT</button>
+          <button type="button" onclick="setType('IN')" id="btn-in" class="py-4 border-4 border-gray-300 bg-gray-50 text-gray-700 font-bold text-xl rounded-xl transition">TIME IN</button>
+          <button type="button" onclick="setType('OUT')" id="btn-out" class="py-4 border-4 border-gray-300 bg-gray-50 text-gray-700 font-bold text-xl rounded-xl transition">TIME OUT</button>
         </div>
       </div>
 
@@ -1391,7 +1386,7 @@ app.get('/scanner/scan', isAuthenticated, requireRole('SCANNER'), async (req, re
           </div>
           <button type="submit" class="w-full bg-blue-600 text-white font-bold py-3 rounded-lg text-lg">Record Attendance</button>
         </form>
-        <button onclick="resetType()" class="text-sm text-gray-500 underline">Change Type</button>
+        <button type="button" onclick="resetType()" class="text-sm text-gray-500 underline">Change Type</button>
       </div>
     </div>
 
@@ -1429,7 +1424,6 @@ app.post('/scanner/record', isAuthenticated, requireRole('SCANNER'), async (req,
   const logsRes = await pool.query('SELECT * FROM attendance_logs WHERE worker_id = $1 AND date = $2 ORDER BY time ASC', [worker_id, today]);
   const logs = logsRes.rows;
 
-  // Validation rules
   if (logs.length === 0 && attendance_type === 'OUT') {
     return res.send('<script>alert("Cannot Record OUT as First Attendance"); window.location.href="/scanner/scan";</script>');
   }
