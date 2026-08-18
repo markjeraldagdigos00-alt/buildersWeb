@@ -255,8 +255,7 @@ app.get('/', async (req, res) => {
     <!DOCTYPE html>
     <html lang="tl">
     <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>${company.company_name} - Attendance Scanner</title>
       <script src="https://cdn.tailwindcss.com"></script>
       <script src="https://unpkg.com/html5-qrcode"></script>
@@ -319,73 +318,41 @@ app.get('/', async (req, res) => {
           if(tab === 'dashboard') loadDashboard();
           if(tab === 'scan') startCamera();
           if(tab === 'today') loadToday();
-          if(tab !== 'scan' && html5QrCode) {
-            html5QrCode.stop().catch(e => {});
-          }
+          if(tab !== 'scan' && html5QrCode) html5QrCode.stop().catch(e => {});
         }
         async function loadDashboard() {
-          try {
-            const res = await fetch('/api/scanner/dashboard'); 
-            const data = await res.json();
-            document.getElementById('d-date').innerText = data.date;
-            document.getElementById('d-present').innerText = data.total_present;
-            document.getElementById('d-timein').innerText = data.total_time_in;
-            document.getElementById('d-timeout').innerText = data.total_time_out;
-          } catch(err) { console.error(err); }
+          const res = await fetch('/api/scanner/dashboard'); const data = await res.json();
+          document.getElementById('d-date').innerText = data.date;
+          document.getElementById('d-present').innerText = data.total_present;
+          document.getElementById('d-timein').innerText = data.total_time_in;
+          document.getElementById('d-timeout').innerText = data.total_time_out;
         }
         function startCamera() {
-          if (!html5QrCode) {
-            html5QrCode = new Html5Qrcode("reader");
-          }
-          html5QrCode.start(
-            { facingMode: "environment" }, 
-            { fps: 15, qrbox: { width: 200, height: 200 } }, 
-            text => processScan(text), 
-            err => {}
-          ).catch(err => {
-            console.error("Camera start error:", err);
-          });
+          if (!html5QrCode) html5QrCode = new Html5Qrcode("reader");
+          html5QrCode.start({ facingMode: "environment" }, { fps: 15, qrbox: { width: 200, height: 200 } }, text => processScan(text), err => {}).catch(err => {});
         }
         async function processScan(code) {
           if (!code) return;
           const box = document.getElementById('scan-result');
           box.classList.remove('hidden', 'bg-emerald-900', 'bg-red-900', 'text-emerald-200', 'text-red-200');
-          try {
-            const res = await fetch('/api/scanner/scan', { 
-              method: 'POST', 
-              headers: {'Content-Type':'application/json'}, 
-              body: JSON.stringify({qr_code: code.trim()}) 
-            });
-            const data = await res.json();
-            if(res.ok) {
-              box.classList.add('bg-emerald-900', 'text-emerald-200');
-              box.innerHTML = '<div class="text-emerald-400 font-extrabold text-sm">✓ ' + data.status_type + ' RECORDED</div><div>Name: ' + data.name + '</div><div>Position: ' + data.position + '</div><div>Time: ' + data.time + '</div>';
-            } else {
-              box.classList.add('bg-red-900', 'text-red-200');
-              box.innerHTML = '<div class="text-red-400 font-bold">X ERROR</div><div>' + data.error + '</div>';
-            }
-          } catch(e) {
+          const res = await fetch('/api/scanner/scan', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({qr_code: code.trim()}) });
+          const data = await res.json();
+          if(res.ok) {
+            box.classList.add('bg-emerald-900', 'text-emerald-200');
+            box.innerHTML = '<div class="text-emerald-400 font-extrabold text-sm">✓ ' + data.status_type + ' RECORDED</div><div>Name: ' + data.name + '</div><div>Position: ' + data.position + '</div><div>Time: ' + data.time + '</div>';
+          } else {
             box.classList.add('bg-red-900', 'text-red-200');
-            box.innerHTML = '<div class="text-red-400 font-bold">X NETWORK ERROR</div>';
+            box.innerHTML = '<div class="text-red-400 font-bold">X ERROR</div><div>' + data.error + '</div>';
           }
           document.getElementById('manual-qr').value = '';
         }
         async function loadToday() {
-          try {
-            const res = await fetch('/api/scanner/today'); 
-            const data = await res.json();
-            const tbody = document.getElementById('today-table-body'); 
-            tbody.innerHTML = '';
-            if(data.length === 0) { 
-              tbody.innerHTML = '<tr><td colspan="4" class="p-3 text-center text-slate-400">Wala pang pumasok.</td></tr>'; 
-              return; 
-            }
-            data.forEach(i => {
-              const timeInStr = i.time_in ? new Date(i.time_in).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '-';
-              const timeOutStr = i.time_out ? new Date(i.time_out).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—';
-              tbody.innerHTML += '<tr><td class="p-2 font-semibold">' + i.full_name + '</td><td class="p-2 text-slate-300">' + i.position + '</td><td class="p-2 text-blue-400 font-bold">' + timeInStr + '</td><td class="p-2 text-purple-400 font-bold">' + timeOutStr + '</td></tr>';
-            });
-          } catch(err) { console.error(err); }
+          const res = await fetch('/api/scanner/today'); const data = await res.json();
+          const tbody = document.getElementById('today-table-body'); tbody.innerHTML = '';
+          if(data.length === 0) { tbody.innerHTML = '<tr><td colspan="4" class="p-3 text-center text-slate-400">Wala pang pumasok.</td></tr>'; return; }
+          data.forEach(i => {
+            tbody.innerHTML += '<tr><td class="p-2 font-semibold">' + i.full_name + '</td><td class="p-2 text-slate-300">' + i.position + '</td><td class="p-2 text-blue-400 font-bold">' + (i.time_in?new Date(i.time_in).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'-') + '</td><td class="p-2 text-purple-400 font-bold">' + (i.time_out?new Date(i.time_out).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'—') + '</td></tr>';
+          });
         }
         loadDashboard();
       </script>
@@ -401,8 +368,7 @@ app.get('/admin', async (req, res) => {
     <!DOCTYPE html>
     <html lang="tl">
     <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>${company.company_name} - Admin Dashboard</title>
       <script src="https://cdn.tailwindcss.com"></script>
     </head>
@@ -438,14 +404,14 @@ app.get('/admin', async (req, res) => {
         <section id="adm-workers" class="hidden space-y-3">
           <div class="bg-slate-800 p-4 rounded-xl space-y-3 border border-slate-700">
             <h2 class="text-sm font-bold text-amber-400">Register New Worker</h2>
-            <form onsubmit="addWorker(event)" class="grid grid-cols-1 md:grid-cols-3 gap-2">
+            <form id="worker-form" onsubmit="addWorker(event)" class="grid grid-cols-1 md:grid-cols-3 gap-2">
               <input type="text" id="wid" placeholder="Worker ID (e.g. W-003)" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-xs">
               <input type="text" id="wname" placeholder="Full Name" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-xs">
               <input type="text" id="wpos" placeholder="Position (e.g. Mason)" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-xs">
               <input type="text" id="wcontact" placeholder="Contact Number" class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-xs">
               <input type="number" id="wrate" placeholder="Daily Rate (₱)" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-xs">
               <input type="text" id="wproject" placeholder="Assigned Project" class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-xs">
-              <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 font-bold p-2 rounded col-span-full text-xs">Save Worker & QR</button>
+              <button type="submit" id="save-worker-btn" class="bg-emerald-600 hover:bg-emerald-500 font-bold p-2 rounded col-span-full text-xs">Save Worker & QR</button>
             </form>
           </div>
           <div class="bg-slate-800 p-4 rounded-xl space-y-3 border border-slate-700">
@@ -521,8 +487,7 @@ app.get('/admin', async (req, res) => {
         }
         async function loadDashboardStats() {
           try {
-            const res = await fetch('/api/admin/dashboard'); 
-            const d = await res.json();
+            const res = await fetch('/api/admin/dashboard'); const d = await res.json();
             document.getElementById('stat-total').innerText = d.total_workers;
             document.getElementById('stat-present').innerText = d.present_today;
             document.getElementById('stat-absent').innerText = d.absent_today;
@@ -531,12 +496,9 @@ app.get('/admin', async (req, res) => {
         }
         async function loadWorkers() {
           try {
-            const res = await fetch('/api/workers'); 
-            const data = await res.json();
-            const tbody = document.getElementById('worker-table'); 
-            const select = document.getElementById('adv-worker');
-            tbody.innerHTML = ''; 
-            select.innerHTML = '<option value="">Select Worker</option>';
+            const res = await fetch('/api/workers'); const data = await res.json();
+            const tbody = document.getElementById('worker-table'); const select = document.getElementById('adv-worker');
+            tbody.innerHTML = ''; select.innerHTML = '<option value="">Select Worker</option>';
             data.forEach(w => {
               tbody.innerHTML += '<tr><td class="p-2 font-bold text-amber-300">' + w.worker_id + '</td><td class="p-2">' + w.full_name + '</td><td class="p-2">' + w.position + '</td><td class="p-2">' + (w.assigned_project || '—') + '</td><td class="p-2 text-emerald-400">₱' + w.daily_rate + '</td><td class="p-2 font-mono text-[11px]">' + w.qr_code + '</td></tr>';
               select.innerHTML += '<option value="' + w.worker_id + '">' + w.full_name + ' (' + w.worker_id + ')</option>';
@@ -545,6 +507,10 @@ app.get('/admin', async (req, res) => {
         }
         async function addWorker(e) {
           e.preventDefault();
+          const btn = document.getElementById('save-worker-btn');
+          btn.disabled = true;
+          btn.innerText = 'Saving...';
+          
           const body = {
             worker_id: document.getElementById('wid').value.trim(),
             full_name: document.getElementById('wname').value.trim(),
@@ -553,28 +519,41 @@ app.get('/admin', async (req, res) => {
             daily_rate: document.getElementById('wrate').value.trim(),
             assigned_project: document.getElementById('wproject').value.trim()
           };
-          const res = await fetch('/api/workers', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
-          if(res.ok) { alert('Worker Registered!'); location.reload(); }
+
+          try {
+            const res = await fetch('/api/workers', { 
+              method: 'POST', 
+              headers: {'Content-Type':'application/json'}, 
+              body: JSON.stringify(body) 
+            });
+            const result = await res.json();
+            if(res.ok) {
+              alert('Worker successfully registered!');
+              document.getElementById('worker-form').reset();
+              loadWorkers();
+            } else {
+              alert('Error: ' + (result.error || 'Hindi ma-save ang worker. Baka pareho ang Worker ID.'));
+            }
+          } catch(err) {
+            alert('Network error. Subukan ulit.');
+          } finally {
+            btn.disabled = false;
+            btn.innerText = 'Save Worker & QR';
+          }
         }
         async function loadAttendance() {
           try {
-            const res = await fetch('/api/admin/attendance'); 
-            const data = await res.json();
-            const tbody = document.getElementById('attendance-table'); 
-            tbody.innerHTML = '';
+            const res = await fetch('/api/admin/attendance'); const data = await res.json();
+            const tbody = document.getElementById('attendance-table'); tbody.innerHTML = '';
             data.forEach(a => {
-              const timeInStr = a.time_in ? new Date(a.time_in).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '-';
-              const timeOutStr = a.time_out ? new Date(a.time_out).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—';
-              tbody.innerHTML += '<tr><td class="p-2 font-semibold">' + a.full_name + '</td><td class="p-2">' + a.date + '</td><td class="p-2 text-blue-400">' + timeInStr + '</td><td class="p-2 text-purple-400">' + timeOutStr + '</td><td class="p-2 text-emerald-400">' + a.status + '</td></tr>';
+              tbody.innerHTML += '<tr><td class="p-2 font-semibold">' + a.full_name + '</td><td class="p-2">' + a.date + '</td><td class="p-2 text-blue-400">' + (a.time_in ? new Date(a.time_in).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '-') + '</td><td class="p-2 text-purple-400">' + (a.time_out ? new Date(a.time_out).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—') + '</td><td class="p-2 text-emerald-400">' + a.status + '</td></tr>';
             });
           } catch(err) { console.error(err); }
         }
         async function loadAdvances() {
           try {
-            const res = await fetch('/api/advances'); 
-            const data = await res.json();
-            const tbody = document.getElementById('advance-table'); 
-            tbody.innerHTML = '';
+            const res = await fetch('/api/advances'); const data = await res.json();
+            const tbody = document.getElementById('advance-table'); tbody.innerHTML = '';
             data.forEach(adv => {
               tbody.innerHTML += '<tr><td class="p-2 font-semibold">' + adv.full_name + '</td><td class="p-2 text-purple-400 font-bold">₱' + adv.amount + '</td><td class="p-2 text-slate-300">' + (adv.reason || '—') + '</td><td class="p-2">' + adv.status + '</td><td class="p-2">' + adv.date + '</td></tr>';
             });
@@ -612,8 +591,7 @@ app.get('/worker', async (req, res) => {
     <!DOCTYPE html>
     <html lang="tl">
     <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>${company.company_name} - Worker Portal</title>
       <script src="https://cdn.tailwindcss.com"></script>
     </head>
@@ -640,8 +618,7 @@ app.get('/worker', async (req, res) => {
             if(res.ok) {
               let attStatus = '<span class="text-red-400 font-bold">WALA PA / ABSENT</span>';
               if(data.today_attendance) {
-                const inTime = new Date(data.today_attendance.time_in).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-                attStatus = '<span class="text-emerald-400 font-bold">PRESENT (In: ' + inTime + ')</span>';
+                attStatus = '<span class="text-emerald-400 font-bold">PRESENT (In: ' + new Date(data.today_attendance.time_in).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) + ')</span>';
               }
               
               let annHTML = '';
@@ -660,9 +637,7 @@ app.get('/worker', async (req, res) => {
             } else {
               box.innerHTML = '<div class="text-red-400 font-bold text-center">' + data.error + '</div>';
             }
-          } catch(err) {
-            console.error(err);
-          }
+          } catch(err) { console.error(err); }
         }
       </script>
     </body>
