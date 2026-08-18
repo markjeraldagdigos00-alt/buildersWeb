@@ -98,10 +98,21 @@ async function ensureTables() {
 
       CREATE TABLE IF NOT EXISTS equipment (
         id SERIAL PRIMARY KEY,
+        item_code VARCHAR(50) UNIQUE NOT NULL,
         item_name VARCHAR(150) NOT NULL,
         category VARCHAR(50),
-        status VARCHAR(50) DEFAULT 'Available',
-        assigned_to VARCHAR(100)
+        quantity INT DEFAULT 0,
+        status VARCHAR(50) DEFAULT 'Available'
+      );
+
+      CREATE TABLE IF NOT EXISTS stock_logs (
+        id SERIAL PRIMARY KEY,
+        item_code VARCHAR(50) NOT NULL,
+        action_type VARCHAR(20) NOT NULL, -- 'STOCK IN' or 'STOCK OUT'
+        quantity INT NOT NULL,
+        personnel VARCHAR(100),
+        notes TEXT,
+        date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
       CREATE TABLE IF NOT EXISTS admin_users (
@@ -216,6 +227,61 @@ app.post('/api/scanner/scan', async (req, res) => {
   }
 });
 
+// Stock In / Out API for Scanner/Admin
+app.get('/api/equipment', async (req, res) => {
+  const result = await pool.query('SELECT * FROM equipment ORDER BY id DESC');
+  res.json(result.rows);
+});
+
+app.post('/api/equipment', async (req, res) => {
+  const { item_code, item_name, category, quantity } = req.body;
+  try {
+    await pool.query(
+      `INSERT INTO equipment (item_code, item_name, category, quantity) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (item_code) DO UPDATE SET item_name = EXCLUDED.item_name, category = EXCLUDED.category, quantity = EXCLUDED.quantity`,
+      [item_code, item_name, category, quantity]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/stock/transaction', async (req, res) => {
+  const { item_code, action_type, quantity, personnel, notes } = req.body;
+  try {
+    const itemRes = await pool.query('SELECT * FROM equipment WHERE item_code = $1', [item_code]);
+    if (itemRes.rows.length === 0) return res.status(404).json({ error: 'Item code not found in inventory!' });
+    const item = itemRes.rows[0];
+
+    let newQty = item.quantity;
+    const qtyNum = parseInt(quantity);
+
+    if (action_type === 'STOCK IN') {
+      newQty += qtyNum;
+    } else if (action_type === 'STOCK OUT') {
+      if (item.quantity < qtyNum) return res.status(400).json({ error: 'Insufficient stock quantity for Stock Out!' });
+      newQty -= qtyNum;
+    }
+
+    await pool.query('UPDATE equipment SET quantity = $1 WHERE item_code = $2', [newQty, item_code]);
+    await pool.query('INSERT INTO stock_logs (item_code, action_type, quantity, personnel, notes) VALUES ($1, $2, $3, $4, $5)', [item_code, action_type, qtyNum, personnel || 'Admin/Scanner', notes || '']);
+
+    res.json({ success: true, new_quantity: newQty, item_name: item.item_name });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/stock/logs', async (req, res) => {
+  const result = await pool.query(`
+    SELECT s.*, e.item_name FROM stock_logs s
+    JOIN equipment e ON s.item_code = e.item_code
+    ORDER BY s.id DESC LIMIT 50
+  `);
+  res.json(result.rows);
+});
+
 app.get('/api/scanner/today', async (req, res) => {
   const today = new Date().toISOString().split('T')[0];
   const result = await pool.query(`
@@ -279,7 +345,6 @@ app.post('/api/announcements', async (req, res) => {
   res.json({ success: true });
 });
 
-// Leave Request Endpoints
 app.get('/api/leave-requests', async (req, res) => {
   const result = await pool.query(`
     SELECT l.*, w.full_name FROM leave_requests l 
@@ -302,13 +367,12 @@ app.post('/api/leave-requests', async (req, res) => {
   }
 });
 
-// Payroll & Salary Reset API
 app.get('/api/admin/payroll-list', async (req, res) => {
   try {
     const workers = await pool.query('SELECT * FROM workers ORDER BY id DESC');
     const payrollData = [];
     for (let w of workers.rows) {
-      const daysRes = await pool.query('SELECT COUNT(*) FROM attendance WHERE worker_id = $1 AND time_in IS NOT NULL', [w.worker_id]);
+      const daysRes = await pool.query("SELECT COUNT(*) FROM attendance WHERE worker_id = $1 AND time_in IS NOT NULL AND status != 'Paid'", [w.worker_id]);
       const daysWorked = parseInt(daysRes.rows[0].count) || 0;
       const totalSalary = daysWorked * parseFloat(w.daily_rate);
       
@@ -336,14 +400,9 @@ app.get('/api/admin/payroll-list', async (req, res) => {
 app.post('/api/admin/pay-worker', async (req, res) => {
   const { worker_id, amount_paid } = req.body;
   try {
-    // 1. Record payment history
     await pool.query('INSERT INTO payroll_records (worker_id, amount_paid) VALUES ($1, $2)', [worker_id, amount_paid]);
-    
-    // 2. Clear or mark attendance/advances as settled if needed or reset salary tracking by clearing attendance logs
-    // (Kung ang sahod ay binubuo ng counted attendance, para bumalik sa 0 ang accumulated salary, puwede nating i-archive o markahan ang attendance, o i-reset ang counter)
-    await pool.query("UPDATE attendance SET status = 'Paid' WHERE worker_id = $1 AND status = 'Present'", [worker_id]);
+    await pool.query("UPDATE attendance SET status = 'Paid' WHERE worker_id = $1 AND status != 'Paid'", [worker_id]);
     await pool.query("UPDATE advances SET status = 'Paid' WHERE worker_id = $1 AND status = 'Unpaid'", [worker_id]);
-
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -397,7 +456,7 @@ app.get('/', async (req, res) => {
     <html lang="tl">
     <head>
       <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>${company.company_name} - Attendance Scanner</title>
+      <title>${company.company_name} - Scanner & Stock Portal</title>
       <script src="https://cdn.tailwindcss.com"></script>
       <script src="https://unpkg.com/html5-qrcode"></script>
     </head>
@@ -407,13 +466,13 @@ app.get('/', async (req, res) => {
           ${company.logo_url ? `<img src="${company.logo_url}" class="w-7 h-7 rounded-full object-cover border border-amber-400">` : '🏗️'}
           <div>
             <h1 class="text-xs sm:text-sm font-bold text-amber-400">${company.company_name}</h1>
-            <p class="text-[9px] text-slate-400">Gate Scanner Only</p>
+            <p class="text-[9px] text-slate-400">Gate & Stock Scanner</p>
           </div>
         </div>
         <div class="space-x-1 text-xs">
-          <button onclick="switchTab('dashboard')" class="bg-slate-700 px-3 py-1.5 rounded-lg font-semibold">Dash</button>
-          <button onclick="switchTab('scan')" class="bg-amber-500 text-slate-900 font-bold px-3 py-1.5 rounded-lg">Scan QR</button>
-          <button onclick="switchTab('today')" class="bg-slate-700 px-3 py-1.5 rounded-lg font-semibold">Today</button>
+          <button onclick="switchTab('dashboard')" class="bg-slate-700 px-2 py-1.5 rounded-lg font-semibold">Dash</button>
+          <button onclick="switchTab('scan')" class="bg-amber-500 text-slate-900 font-bold px-2 py-1.5 rounded-lg">Scan QR</button>
+          <button onclick="switchTab('stock')" class="bg-purple-600 px-2 py-1.5 rounded-lg font-bold">Stock In/Out</button>
         </div>
       </nav>
       <main class="flex-1 max-w-lg w-full mx-auto p-3 mt-2">
@@ -439,14 +498,33 @@ app.get('/', async (req, res) => {
           <div id="scan-result" class="hidden p-3 rounded-xl font-bold text-left space-y-1 text-xs"></div>
         </section>
 
-        <section id="tab-today" class="hidden bg-slate-800 p-4 rounded-2xl space-y-3 border border-slate-700 shadow-xl">
-          <h2 class="text-base font-bold text-amber-400">Today's Attendance</h2>
-          <div class="overflow-x-auto max-h-[55vh]">
-            <table class="w-full text-left text-xs">
-              <thead><tr class="bg-slate-700 text-slate-300 border-b border-slate-600"><th class="p-2">Worker</th><th class="p-2">Pos</th><th class="p-2">In</th><th class="p-2">Out</th></tr></thead>
-              <tbody id="today-table-body" class="divide-y divide-slate-700"></tbody>
-            </table>
-          </div>
+        <section id="tab-stock" class="hidden bg-slate-800 p-4 rounded-2xl space-y-3 border border-slate-700 shadow-xl">
+          <h2 class="text-base font-bold text-purple-400">📦 Quick Stock In / Stock Out</h2>
+          <form onsubmit="scannerStockTx(event)" class="space-y-2 text-xs">
+            <div>
+              <label class="text-[10px] text-slate-400">Select Item</label>
+              <select id="st-item-code" required class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white"></select>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="text-[10px] text-slate-400">Action Type</label>
+                <select id="st-action" required class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white">
+                  <option value="STOCK IN">STOCK IN (+)</option>
+                  <option value="STOCK OUT">STOCK OUT (-)</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-[10px] text-slate-400">Quantity</label>
+                <input type="number" id="st-qty" min="1" value="1" required class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white">
+              </div>
+            </div>
+            <div>
+              <label class="text-[10px] text-slate-400">Personnel / Gate Guard</label>
+              <input type="text" id="st-personnel" placeholder="Pangalan mo..." required class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white">
+            </div>
+            <button type="submit" class="bg-purple-600 hover:bg-purple-500 font-bold p-2.5 rounded w-full">Submit Stock Transaction</button>
+          </form>
+          <div id="st-result" class="hidden p-2 rounded text-xs font-bold"></div>
         </section>
       </main>
       <script>
@@ -454,11 +532,11 @@ app.get('/', async (req, res) => {
         function switchTab(tab) {
           document.getElementById('tab-dashboard').classList.add('hidden');
           document.getElementById('tab-scan').classList.add('hidden');
-          document.getElementById('tab-today').classList.add('hidden');
+          document.getElementById('tab-stock').classList.add('hidden');
           document.getElementById('tab-' + tab).classList.remove('hidden');
           if(tab === 'dashboard') loadDashboard();
           if(tab === 'scan') startCamera();
-          if(tab === 'today') loadToday();
+          if(tab === 'stock') loadStockItems();
           if(tab !== 'scan' && html5QrCode) html5QrCode.stop().catch(e => {});
         }
         async function loadDashboard() {
@@ -494,15 +572,37 @@ app.get('/', async (req, res) => {
           }
           document.getElementById('manual-qr').value = '';
         }
-        async function loadToday() {
+        async function loadStockItems() {
           try {
-            const res = await fetch('/api/scanner/today'); const data = await res.json();
-            const tbody = document.getElementById('today-table-body'); tbody.innerHTML = '';
-            if(data.length === 0) { tbody.innerHTML = '<tr><td colspan="4" class="p-3 text-center text-slate-400">Wala pang pumasok.</td></tr>'; return; }
+            const res = await fetch('/api/equipment'); const data = await res.json();
+            const sel = document.getElementById('st-item-code'); sel.innerHTML = '<option value="">Pili ng Materyales/Gamit</option>';
             data.forEach(i => {
-              tbody.innerHTML += '<tr><td class="p-2 font-semibold">' + i.full_name + '</td><td class="p-2 text-slate-300">' + i.position + '</td><td class="p-2 text-blue-400 font-bold">' + (i.time_in?new Date(i.time_in).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'-') + '</td><td class="p-2 text-purple-400 font-bold">' + (i.time_out?new Date(i.time_out).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'—') + '</td></tr>';
+              sel.innerHTML += '<option value="' + i.item_code + '">' + i.item_name + ' (Stock: ' + i.quantity + ')</option>';
             });
           } catch(e) {}
+        }
+        async function scannerStockTx(e) {
+          e.preventDefault();
+          const body = {
+            item_code: document.getElementById('st-item-code').value,
+            action_type: document.getElementById('st-action').value,
+            quantity: document.getElementById('st-qty').value,
+            personnel: document.getElementById('st-personnel').value
+          };
+          const resBox = document.getElementById('st-result');
+          try {
+            const res = await fetch('/api/stock/transaction', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+            const data = await res.json();
+            resBox.classList.remove('hidden', 'bg-emerald-900', 'bg-red-900');
+            if(res.ok) {
+              resBox.classList.add('bg-emerald-900', 'text-emerald-200');
+              resBox.innerText = '✓ Success! Bagong stock ng ' + data.item_name + ': ' + data.new_quantity;
+              loadStockItems();
+            } else {
+              resBox.classList.add('bg-red-900', 'text-red-200');
+              resBox.innerText = 'X Error: ' + data.error;
+            }
+          } catch(err) { alert('Network error'); }
         }
         loadDashboard();
       </script>
@@ -519,7 +619,7 @@ app.get('/admin', async (req, res) => {
     <html lang="tl">
     <head>
       <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>${company.company_name} - Full Admin Portal</title>
+      <title>${company.company_name} - Admin Portal</title>
       <script src="https://cdn.tailwindcss.com"></script>
       <style>
         @media print {
@@ -544,16 +644,11 @@ app.get('/admin', async (req, res) => {
           <button onclick="switchAdminTab('dash')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 bg-amber-500 text-slate-900 font-bold">🏠 Dashboard</button>
           <button onclick="switchAdminTab('workers')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">👷 Workers</button>
           <button onclick="switchAdminTab('qr')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">📱 QR Attendance</button>
-          <button onclick="switchAdminTab('projects')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">🏢 Projects</button>
-          <button onclick="switchAdminTab('schedules')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">🕒 Schedules</button>
           <button onclick="switchAdminTab('payroll')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">💰 Payroll</button>
           <button onclick="switchAdminTab('advance')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">💵 Cash Advance</button>
+          <button onclick="switchAdminTab('stock')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">📦 Stock In/Out</button>
           <button onclick="switchAdminTab('leave')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">📝 Leave Requests</button>
           <button onclick="switchAdminTab('announce')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">📢 Announcements</button>
-          <button onclick="switchAdminTab('safety')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">🦺 Safety Management</button>
-          <button onclick="switchAdminTab('equipment')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">📦 Equipment</button>
-          <button onclick="switchAdminTab('reports')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">📄 Reports</button>
-          <button onclick="switchAdminTab('users')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">👤 User Management</button>
           <button onclick="switchAdminTab('settings')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">⚙️ Settings</button>
         </nav>
       </aside>
@@ -600,25 +695,13 @@ app.get('/admin', async (req, res) => {
           </table></div>
         </section>
 
-        <section id="adm-projects" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
-          <h2 class="text-sm font-bold text-amber-400">🏢 Projects Management</h2>
-          <p class="text-xs text-slate-400">Manage site locations and active construction projects.</p>
-          <div class="p-3 bg-slate-700/50 rounded-lg text-xs text-slate-300">Sample Active Projects: <b>Building A (Angeles City)</b>, <b>Building B (Clark)</b></div>
-        </section>
-
-        <section id="adm-schedules" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
-          <h2 class="text-sm font-bold text-amber-400">🕒 Work Schedules</h2>
-          <p class="text-xs text-slate-400">Set standard work shifts and overtime schedules.</p>
-          <div class="p-3 bg-slate-700/50 rounded-lg text-xs text-slate-300">Standard Shift: 8:00 AM - 5:00 PM (Monday to Saturday)</div>
-        </section>
-
         <section id="adm-payroll" class="hidden space-y-4">
           <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3" id="printable-payroll">
             <div class="flex justify-between items-center">
               <h2 class="text-sm font-bold text-amber-400">💰 Payroll Processing & Salary Reset</h2>
               <button onclick="window.print()" class="bg-emerald-600 hover:bg-emerald-500 font-bold px-3 py-1.5 rounded text-xs no-print">🖨️ Print / Save Payroll</button>
             </div>
-            <p class="text-xs text-slate-400 no-print">Kapag na-release na ang sahod, i-click ang "Pay & Reset to 0" para ibalik sa zero ang accumulated salary ng worker.</p>
+            <p class="text-xs text-slate-400 no-print">Kapag na-release na ang sahod, i-click ang "Pay & Reset to 0" para ibalik sa zero ang accumulated salary.</p>
             <div class="overflow-x-auto">
               <table class="w-full text-left text-xs">
                 <thead>
@@ -657,6 +740,37 @@ app.get('/admin', async (req, res) => {
           </div>
         </section>
 
+        <section id="adm-stock" class="hidden space-y-4">
+          <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
+            <h2 class="text-sm font-bold text-purple-400">📦 Add New Equipment / Material Inventory</h2>
+            <form onsubmit="addEquipment(event)" class="grid grid-cols-1 md:grid-cols-4 gap-2 text-xs">
+              <input type="text" id="eq-code" placeholder="Item Code (e.g. MAT-01)" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white">
+              <input type="text" id="eq-name" placeholder="Item Name (e.g. Cement)" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white">
+              <input type="text" id="eq-category" placeholder="Category" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white">
+              <input type="number" id="eq-qty" placeholder="Initial Quantity" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white">
+              <button type="submit" class="bg-purple-600 hover:bg-purple-500 font-bold p-2 rounded col-span-full">Save Item to Inventory</button>
+            </form>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
+              <h2 class="text-sm font-bold text-amber-400">Inventory Items List</h2>
+              <div class="overflow-x-auto max-h-64"><table class="w-full text-left text-xs">
+                <thead><tr class="bg-slate-700 text-slate-300 border-b border-slate-600"><th class="p-2">Code</th><th class="p-2">Name</th><th class="p-2">Category</th><th class="p-2">Qty</th></tr></thead>
+                <tbody id="equipment-table" class="divide-y divide-slate-700"></tbody>
+              </table></div>
+            </div>
+
+            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
+              <h2 class="text-sm font-bold text-amber-400">Stock In / Out Logs History</h2>
+              <div class="overflow-x-auto max-h-64"><table class="w-full text-left text-xs">
+                <thead><tr class="bg-slate-700 text-slate-300 border-b border-slate-600"><th class="p-2">Item</th><th class="p-2">Action</th><th class="p-2">Qty</th><th class="p-2">By</th></tr></thead>
+                <tbody id="stock-logs-table" class="divide-y divide-slate-700"></tbody>
+              </table></div>
+            </div>
+          </div>
+        </section>
+
         <section id="adm-leave" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">📝 Leave Requests Management</h2>
           <div class="overflow-x-auto">
@@ -685,30 +799,6 @@ app.get('/admin', async (req, res) => {
           </form>
         </section>
 
-        <section id="adm-safety" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
-          <h2 class="text-sm font-bold text-amber-400">🦺 Safety Management</h2>
-          <p class="text-xs text-slate-400">Safety compliance, incident reports, and PPE tracking.</p>
-          <div class="p-3 bg-slate-700/50 rounded-lg text-xs text-emerald-400 font-bold">✓ 0 Safety Incidents reported this month.</div>
-        </section>
-
-        <section id="adm-equipment" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
-          <h2 class="text-sm font-bold text-amber-400">📦 Equipment & Tools</h2>
-          <p class="text-xs text-slate-400">Track heavy equipment and borrowed tools per site.</p>
-          <div class="p-3 bg-slate-700/50 rounded-lg text-xs text-slate-300">Heavy machinery and construction equipment inventory.</div>
-        </section>
-
-        <section id="adm-reports" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
-          <h2 class="text-sm font-bold text-amber-400">📄 System Reports</h2>
-          <p class="text-xs text-slate-400">Export attendance summary, payroll, and advance logs.</p>
-          <button onclick="alert('Export feature ready.')" class="bg-slate-700 hover:bg-slate-600 border border-slate-600 px-3 py-2 rounded text-xs font-bold">📥 Export PDF / CSV Summary</button>
-        </section>
-
-        <section id="adm-users" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
-          <h2 class="text-sm font-bold text-amber-400">👤 User Management</h2>
-          <p class="text-xs text-slate-400">Manage admin roles and gate scanner credentials.</p>
-          <div class="p-3 bg-slate-700/50 rounded-lg text-xs text-slate-300">Main Admin: <b>admin@abcbuilders.com</b></div>
-        </section>
-
         <section id="adm-settings" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">⚙️ Company Settings</h2>
           <form onsubmit="saveSettings(event)" class="space-y-2">
@@ -723,7 +813,7 @@ app.get('/admin', async (req, res) => {
       </main>
 
       <script>
-        const tabs = ['dash', 'workers', 'qr', 'projects', 'schedules', 'payroll', 'advance', 'leave', 'announce', 'safety', 'equipment', 'reports', 'users', 'settings'];
+        const tabs = ['dash', 'workers', 'qr', 'payroll', 'advance', 'stock', 'leave', 'announce', 'settings'];
 
         function switchAdminTab(tabName) {
           tabs.forEach(t => {
@@ -745,6 +835,7 @@ app.get('/admin', async (req, res) => {
           if(tabName === 'qr') loadAttendance();
           if(tabName === 'advance') loadAdvances();
           if(tabName === 'payroll') loadPayroll();
+          if(tabName === 'stock') loadStockManagement();
           if(tabName === 'leave') loadAdminLeaves();
         }
 
@@ -861,6 +952,39 @@ app.get('/admin', async (req, res) => {
               tbody.innerHTML += '<tr><td class="p-2 font-semibold">' + adv.full_name + '</td><td class="p-2 text-purple-400 font-bold">₱' + adv.amount + '</td><td class="p-2 text-slate-300">' + (adv.reason || '—') + '</td><td class="p-2">' + adv.status + '</td><td class="p-2">' + adv.date + '</td></tr>';
             });
           } catch(err) {}
+        }
+
+        async function loadStockManagement() {
+          try {
+            const eqRes = await fetch('/api/equipment'); const eqData = await eqRes.json();
+            const eqTbody = document.getElementById('equipment-table'); eqTbody.innerHTML = '';
+            eqData.forEach(e => {
+              eqTbody.innerHTML += '<tr><td class="p-2 font-bold text-purple-300">' + e.item_code + '</td><td class="p-2">' + e.item_name + '</td><td class="p-2 text-slate-300">' + e.category + '</td><td class="p-2 font-bold text-amber-400">' + e.quantity + '</td></tr>';
+            });
+
+            const logRes = await fetch('/api/stock/logs'); const logData = await logRes.json();
+            const logTbody = document.getElementById('stock-logs-table'); logTbody.innerHTML = '';
+            logData.forEach(l => {
+              const badge = l.action_type === 'STOCK IN' ? '<span class="text-emerald-400 font-bold">IN</span>' : '<span class="text-red-400 font-bold">OUT</span>';
+              logTbody.innerHTML += '<tr><td class="p-2">' + l.item_name + '</td><td class="p-2">' + badge + '</td><td class="p-2 font-bold">' + l.quantity + '</td><td class="p-2 text-slate-300">' + l.personnel + '</td></tr>';
+            });
+          } catch(err) {}
+        }
+
+        async function addEquipment(e) {
+          e.preventDefault();
+          const body = {
+            item_code: document.getElementById('eq-code').value.trim(),
+            item_name: document.getElementById('eq-name').value.trim(),
+            category: document.getElementById('eq-category').value.trim(),
+            quantity: document.getElementById('eq-qty').value.trim()
+          };
+          const res = await fetch('/api/equipment', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+          if(res.ok) {
+            alert('Equipment/Material added successfully!');
+            document.getElementById('eq-code').value=''; document.getElementById('eq-name').value=''; document.getElementById('eq-category').value=''; document.getElementById('eq-qty').value='';
+            loadStockManagement();
+          }
         }
 
         async function loadAdminLeaves() {
@@ -1092,7 +1216,7 @@ app.get('/worker', async (req, res) => {
             if(res.ok) {
               alert('Leave request successfully submitted!');
               closeLeaveModal();
-              checkWorker(); // Refresh data
+              checkWorker();
             } else {
               alert('Error submitting leave.');
             }
