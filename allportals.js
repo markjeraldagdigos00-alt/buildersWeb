@@ -109,7 +109,7 @@ async function ensureTables() {
       );
     `);
 
-    // Siguraduhing nandoon ang lahat ng attendance columns kahit luma na ang table
+    // Ligtas na pagdaragdag ng columns para hindi magka-error kahit lumang database pa ito
     await pool.query(`ALTER TABLE attendance ADD COLUMN IF NOT EXISTS time_in_am TIMESTAMP;`);
     await pool.query(`ALTER TABLE attendance ADD COLUMN IF NOT EXISTS time_out_am TIMESTAMP;`);
     await pool.query(`ALTER TABLE attendance ADD COLUMN IF NOT EXISTS time_in_pm TIMESTAMP;`);
@@ -131,7 +131,7 @@ async function ensureTables() {
       `);
     }
 
-    console.log('Database tables successfully verified and ready!');
+    console.log('Database verified successfully!');
   } catch (err) {
     console.error('DB Setup Error:', err.message);
   }
@@ -459,8 +459,6 @@ app.get('/admin', async (req, res) => {
       <script src="https://cdn.tailwindcss.com"></script>
     </head>
     <body class="bg-slate-900 text-white min-h-screen flex flex-col md:flex-row">
-      
-      <!-- SIDEBAR NAVIGATION -->
       <aside class="w-full md:w-64 bg-slate-800 border-r border-slate-700 flex-shrink-0 p-4 space-y-4">
         <div class="flex items-center gap-3 border-b border-slate-700 pb-3">
           ${company.logo_url ? `<img src="${company.logo_url}" class="w-8 h-8 rounded-full object-cover border border-amber-400">` : '🏗️'}
@@ -469,7 +467,6 @@ app.get('/admin', async (req, res) => {
             <p class="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Admin Panel</p>
           </div>
         </div>
-
         <nav class="space-y-1 text-xs font-semibold overflow-x-auto md:overflow-y-auto max-h-[75vh] flex md:block gap-2 md:gap-0 pb-2">
           <button onclick="switchAdminTab('dash')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 bg-amber-500 text-slate-900 font-bold">🏠 Dashboard</button>
           <button onclick="switchAdminTab('workers')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">👷 Workers</button>
@@ -487,11 +484,7 @@ app.get('/admin', async (req, res) => {
           <button onclick="switchAdminTab('settings')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">⚙️ Settings</button>
         </nav>
       </aside>
-
-      <!-- MAIN CONTENT AREA -->
       <main class="flex-1 p-4 overflow-y-auto">
-        
-        <!-- 1. DASHBOARD -->
         <section id="adm-dash" class="space-y-4">
           <h2 class="text-base font-bold text-amber-400">🏠 Dashboard Overview</h2>
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
@@ -501,8 +494,6 @@ app.get('/admin', async (req, res) => {
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700"><p class="text-xs text-slate-400">Total Advance</p><h3 id="stat-advance" class="text-2xl font-bold text-purple-400 mt-1">₱0</h3></div>
           </div>
         </section>
-
-        <!-- 2. WORKERS -->
         <section id="adm-workers" class="hidden space-y-4">
           <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
             <h2 class="text-sm font-bold text-amber-400">👷 Add / Update Worker</h2>
@@ -524,8 +515,6 @@ app.get('/admin', async (req, res) => {
             </table></div>
           </div>
         </section>
-
-        <!-- 3. QR ATTENDANCE -->
         <section id="adm-qr" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">📱 QR Attendance Logs</h2>
           <div class="overflow-x-auto"><table class="w-full text-left text-xs">
@@ -533,26 +522,18 @@ app.get('/admin', async (req, res) => {
             <tbody id="attendance-table" class="divide-y divide-slate-700"></tbody>
           </table></div>
         </section>
-
-        <!-- 4. PROJECTS -->
         <section id="adm-projects" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">🏢 Projects Management</h2>
           <p class="text-xs text-slate-400">Manage site locations and active construction projects.</p>
         </section>
-
-        <!-- 5. SCHEDULES -->
         <section id="adm-schedules" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">🕒 Work Schedules</h2>
           <p class="text-xs text-slate-400">Set standard work shifts and overtime schedules.</p>
         </section>
-
-        <!-- 6. PAYROLL -->
         <section id="adm-payroll" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">💰 Payroll Processing</h2>
           <p class="text-xs text-slate-400">Compute total salaries, deductions, and weekly payslips.</p>
         </section>
-
-        <!-- 7. CASH ADVANCE -->
         <section id="adm-advance" class="hidden space-y-4">
           <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
             <h2 class="text-sm font-bold text-amber-400">💵 Add Cash Advance</h2>
@@ -571,14 +552,10 @@ app.get('/admin', async (req, res) => {
             </table></div>
           </div>
         </section>
-
-        <!-- 8. LEAVE REQUESTS -->
         <section id="adm-leave" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">📝 Leave Requests</h2>
           <p class="text-xs text-slate-400">Approve or reject leave applications from workers.</p>
         </section>
-
-        <!-- 9. ANNOUNCEMENTS -->
         <section id="adm-announce" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">📢 Post Announcements</h2>
           <form onsubmit="postAnnouncement(event)" class="space-y-2">
@@ -587,33 +564,23 @@ app.get('/admin', async (req, res) => {
             <button type="submit" class="bg-blue-600 hover:bg-blue-500 font-bold p-2 rounded w-full text-xs">Publish Announcement</button>
           </form>
         </section>
-
-        <!-- 10. SAFETY MANAGEMENT -->
         <section id="adm-safety" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">🦺 Safety Management</h2>
           <p class="text-xs text-slate-400">Safety compliance, incident reports, and PPE tracking.</p>
         </section>
-
-        <!-- 11. EQUIPMENT -->
         <section id="adm-equipment" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">📦 Equipment & Tools</h2>
           <p class="text-xs text-slate-400">Track heavy equipment and borrowed tools per site.</p>
         </section>
-
-        <!-- 12. REPORTS -->
         <section id="adm-reports" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">📄 System Reports</h2>
           <p class="text-xs text-slate-400">Export attendance summary, payroll, and advance logs.</p>
           <button onclick="alert('Export feature ready.')" class="bg-slate-700 hover:bg-slate-600 border border-slate-600 px-3 py-2 rounded text-xs font-bold">📥 Export PDF / CSV Summary</button>
         </section>
-
-        <!-- 13. USER MANAGEMENT -->
         <section id="adm-users" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">👤 User Management</h2>
           <p class="text-xs text-slate-400">Manage admin roles and gate scanner credentials.</p>
         </section>
-
-        <!-- 14. SETTINGS -->
         <section id="adm-settings" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">⚙️ Company Settings</h2>
           <form onsubmit="saveSettings(event)" class="space-y-2">
@@ -624,12 +591,9 @@ app.get('/admin', async (req, res) => {
             <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 font-bold p-2 rounded w-full text-xs">Save Settings</button>
           </form>
         </section>
-
       </main>
-
       <script>
         const tabs = ['dash', 'workers', 'qr', 'projects', 'schedules', 'payroll', 'advance', 'leave', 'announce', 'safety', 'equipment', 'reports', 'users', 'settings'];
-
         function switchAdminTab(tabName) {
           tabs.forEach(t => {
             const el = document.getElementById('adm-' + t);
@@ -650,7 +614,6 @@ app.get('/admin', async (req, res) => {
           if(tabName === 'qr') loadAttendance();
           if(tabName === 'advance') loadAdvances();
         }
-
         async function loadDashboardStats() {
           try {
             const res = await fetch('/api/admin/dashboard'); const d = await res.json();
@@ -660,7 +623,6 @@ app.get('/admin', async (req, res) => {
             document.getElementById('stat-advance').innerText = '₱' + d.total_advance.toLocaleString();
           } catch(err) {}
         }
-
         async function loadWorkers() {
           try {
             const res = await fetch('/api/workers'); const data = await res.json();
@@ -672,12 +634,10 @@ app.get('/admin', async (req, res) => {
             });
           } catch(err) {}
         }
-
         async function addWorker(e) {
           e.preventDefault();
           const btn = document.getElementById('save-worker-btn');
           btn.disabled = true; btn.innerText = 'Saving...';
-          
           const body = {
             worker_id: document.getElementById('wid').value.trim(),
             full_name: document.getElementById('wname').value.trim(),
@@ -686,7 +646,6 @@ app.get('/admin', async (req, res) => {
             daily_rate: document.getElementById('wrate').value.trim(),
             assigned_project: document.getElementById('wproject').value.trim()
           };
-
           try {
             const res = await fetch('/api/workers', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
             const result = await res.json();
@@ -698,7 +657,6 @@ app.get('/admin', async (req, res) => {
           } catch(err) { alert('Network error.'); }
           finally { btn.disabled = false; btn.innerText = 'Save Worker & Generate QR'; }
         }
-
         async function loadAttendance() {
           try {
             const res = await fetch('/api/admin/attendance'); const data = await res.json();
@@ -710,7 +668,6 @@ app.get('/admin', async (req, res) => {
             });
           } catch(err) {}
         }
-
         async function loadAdvances() {
           try {
             const res = await fetch('/api/advances'); const data = await res.json();
@@ -720,28 +677,24 @@ app.get('/admin', async (req, res) => {
             });
           } catch(err) {}
         }
-
         async function addAdvance(e) {
           e.preventDefault();
           const body = { worker_id: document.getElementById('adv-worker').value, amount: document.getElementById('adv-amount').value, reason: document.getElementById('adv-reason').value };
           const res = await fetch('/api/advances', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
           if(res.ok) { alert('Advance Recorded!'); loadAdvances(); }
         }
-
         async function postAnnouncement(e) {
           e.preventDefault();
           const body = { title: document.getElementById('ann-title').value, message: document.getElementById('ann-msg').value };
           const res = await fetch('/api/announcements', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
           if(res.ok) { alert('Announcement Posted!'); document.getElementById('ann-title').value=''; document.getElementById('ann-msg').value=''; }
         }
-
         async function saveSettings(e) {
           e.preventDefault();
           const body = { company_name: document.getElementById('set-name').value, logo_url: document.getElementById('set-logo').value, address: document.getElementById('set-address').value, contact_number: document.getElementById('set-contact').value };
           const res = await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
           if(res.ok) { alert('Settings Updated!'); location.reload(); }
         }
-
         loadDashboardStats();
       </script>
     </body>
@@ -763,8 +716,6 @@ app.get('/worker', async (req, res) => {
     </head>
     <body class="bg-slate-900 text-white min-h-screen p-3 flex flex-col items-center justify-center">
       <div class="max-w-md w-full bg-slate-800 p-5 rounded-2xl shadow-xl space-y-4 border border-slate-700">
-        
-        <!-- LOGIN SCREEN -->
         <div id="login-screen" class="space-y-3 text-center">
           ${company.logo_url ? `<img src="${company.logo_url}" class="w-12 h-12 rounded-full object-cover mx-auto border-2 border-purple-400">` : '👷'}
           <h1 class="text-base font-bold text-purple-400">${company.company_name}</h1>
@@ -775,10 +726,7 @@ app.get('/worker', async (req, res) => {
           </div>
           <div id="login-error" class="text-red-400 text-xs font-bold hidden"></div>
         </div>
-
-        <!-- DASHBOARD CONTAINER -->
         <div id="worker-dashboard" class="hidden space-y-4">
-          
           <div class="text-center pb-3 border-b border-slate-700 flex items-center justify-between">
             <div class="flex items-center gap-2 text-left">
               ${company.logo_url ? `<img src="${company.logo_url}" class="w-8 h-8 rounded-full object-cover border border-purple-400">` : '🏗️'}
@@ -791,15 +739,12 @@ app.get('/worker', async (req, res) => {
               <div id="w-name" class="font-bold text-sm text-white">-</div>
             </div>
           </div>
-
-          <!-- WORKER TABS -->
           <div id="tab-home" class="worker-tab space-y-3">
             <div class="bg-slate-700/50 p-4 rounded-xl border border-slate-600 text-center space-y-2">
               <div class="text-xs text-slate-400 font-semibold uppercase">Today's Attendance Status</div>
               <div id="w-today-status" class="text-base font-extrabold text-red-400">WALA PA / ABSENT</div>
             </div>
           </div>
-
           <div id="tab-qr" class="worker-tab hidden space-y-3 text-center">
             <div class="text-xs font-bold text-purple-400 uppercase">My QR Code</div>
             <div class="bg-white p-4 inline-block rounded-xl shadow-inner">
@@ -807,7 +752,6 @@ app.get('/worker', async (req, res) => {
             </div>
             <div class="text-xs text-slate-300 font-mono font-bold" id="w-qr-text">-</div>
           </div>
-
           <div id="tab-attendance" class="worker-tab hidden space-y-2">
             <div class="text-xs font-bold text-purple-400 uppercase">Attendance History</div>
             <div class="overflow-x-auto max-h-48">
@@ -817,7 +761,6 @@ app.get('/worker', async (req, res) => {
               </table>
             </div>
           </div>
-
           <div id="tab-advance" class="worker-tab hidden space-y-2">
             <div class="text-xs font-bold text-purple-400 uppercase">Advances / Cash Advance</div>
             <div class="overflow-x-auto max-h-48">
@@ -827,7 +770,6 @@ app.get('/worker', async (req, res) => {
               </table>
             </div>
           </div>
-
           <div id="tab-salary" class="worker-tab hidden space-y-2">
             <div class="text-xs font-bold text-purple-400 uppercase">Salary Breakdown</div>
             <div class="bg-slate-700/50 p-3 rounded-xl border border-slate-600 space-y-1.5 text-xs">
@@ -838,13 +780,10 @@ app.get('/worker', async (req, res) => {
               <div class="flex justify-between border-t border-slate-600 pt-1 font-extrabold text-sm text-emerald-400"><span>Net Salary:</span> <span id="s-net">₱0</span></div>
             </div>
           </div>
-
           <div id="tab-announce" class="worker-tab hidden space-y-2">
             <div class="text-xs font-bold text-purple-400 uppercase">Announcements</div>
             <div id="w-announcements-list" class="space-y-2 max-h-48 overflow-y-auto"></div>
           </div>
-
-          <!-- WORKER BOTTOM MENU -->
           <div class="grid grid-cols-6 gap-1 pt-2 border-t border-slate-700 text-[10px]">
             <button onclick="switchWorkerTab('home')" class="worker-nav-btn bg-purple-600 text-white font-bold p-1.5 rounded text-center">🏠<br>Home</button>
             <button onclick="switchWorkerTab('qr')" class="worker-nav-btn bg-slate-700 text-slate-300 p-1.5 rounded text-center">📱<br>QR</button>
@@ -853,17 +792,13 @@ app.get('/worker', async (req, res) => {
             <button onclick="switchWorkerTab('salary')" class="worker-nav-btn bg-slate-700 text-slate-300 p-1.5 rounded text-center">💰<br>Salary</button>
             <button onclick="logoutWorker()" class="bg-red-900/60 text-red-300 p-1.5 rounded text-center font-bold">🚪<br>Exit</button>
           </div>
-
         </div>
       </div>
-
       <script>
         let globalWorkerData = null;
-
         function switchWorkerTab(tabName) {
           document.querySelectorAll('.worker-tab').forEach(el => el.classList.add('hidden'));
           document.getElementById('tab-' + tabName).classList.remove('hidden');
-          
           document.querySelectorAll('.worker-nav-btn').forEach(btn => {
             btn.classList.remove('bg-purple-600', 'text-white');
             btn.classList.add('bg-slate-700', 'text-slate-300');
@@ -871,13 +806,11 @@ app.get('/worker', async (req, res) => {
           event.currentTarget.classList.remove('bg-slate-700', 'text-slate-300');
           event.currentTarget.classList.add('bg-purple-600', 'text-white');
         }
-
         async function checkWorker() {
           const id = document.getElementById('worker-id-input').value.trim();
           const errBox = document.getElementById('login-error');
           if(!id) return;
           errBox.classList.add('hidden');
-          
           try {
             const res = await fetch('/api/worker/' + encodeURIComponent(id));
             const data = await res.json();
@@ -885,10 +818,8 @@ app.get('/worker', async (req, res) => {
               globalWorkerData = data;
               document.getElementById('login-screen').classList.add('hidden');
               document.getElementById('worker-dashboard').classList.remove('hidden');
-
               document.getElementById('w-name').innerText = data.worker.full_name;
               document.getElementById('w-pos-id').innerText = data.worker.position + ' | ID: ' + data.worker.worker_id;
-              
               let attStatusHTML = '<span class="text-red-400">WALA PA / ABSENT</span>';
               if(data.today_attendance) {
                 let inVal = data.today_attendance.time_in_am || data.today_attendance.time_in;
@@ -896,7 +827,6 @@ app.get('/worker', async (req, res) => {
                 attStatusHTML = '<span class="text-emerald-400">PRESENT</span><br><span class="text-xs text-slate-300">Time In: ' + timeInStr + '</span>';
               }
               document.getElementById('w-today-status').innerHTML = attStatusHTML;
-
               document.getElementById('w-qr-text').innerText = data.worker.qr_code;
               document.getElementById('qrcode').innerHTML = '';
               new QRCode(document.getElementById("qrcode"), {
@@ -904,7 +834,6 @@ app.get('/worker', async (req, res) => {
                 width: 128,
                 height: 128
               });
-
               const attTbody = document.getElementById('w-attendance-table');
               attTbody.innerHTML = '';
               if(data.attendance.length === 0) {
@@ -916,7 +845,6 @@ app.get('/worker', async (req, res) => {
                   attTbody.innerHTML += '<tr><td class="p-1.5">' + att.date + '</td><td class="p-1.5 text-blue-400">' + (inVal ? new Date(inVal).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '-') + '</td><td class="p-1.5 text-purple-400">' + (outVal ? new Date(outVal).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—') + '</td><td class="p-1.5 text-emerald-400">' + att.status + '</td></tr>';
                 });
               }
-
               const advTbody = document.getElementById('w-advance-table');
               advTbody.innerHTML = '';
               if(data.advances.length === 0) {
@@ -926,13 +854,11 @@ app.get('/worker', async (req, res) => {
                   advTbody.innerHTML += '<tr><td class="p-1.5">' + adv.date + '</td><td class="p-1.5 text-purple-400 font-bold">₱' + adv.amount + '</td><td class="p-1.5 text-slate-300">' + (adv.reason || '—') + '</td><td class="p-1.5">' + adv.status + '</td></tr>';
                 });
               }
-
               document.getElementById('s-rate').innerText = '₱' + data.salary.daily_rate.toLocaleString();
               document.getElementById('s-days').innerText = data.salary.days_worked + ' days';
               document.getElementById('s-total').innerText = '₱' + data.salary.total_salary.toLocaleString();
               document.getElementById('s-advance').innerText = '-₱' + data.salary.advance.toLocaleString();
               document.getElementById('s-net').innerText = '₱' + data.salary.net_salary.toLocaleString();
-
               const annList = document.getElementById('w-announcements-list');
               annList.innerHTML = '';
               if(data.announcements.length === 0) {
@@ -942,7 +868,6 @@ app.get('/worker', async (req, res) => {
                   annList.innerHTML += '<div class="p-2 bg-slate-700/60 rounded border border-slate-600"><div class="font-bold text-amber-400 text-xs">📢 ' + ann.title + '</div><div class="text-[11px] text-slate-300 mt-0.5">' + ann.message + '</div></div>';
                 });
               }
-
             } else {
               errBox.innerText = data.error || 'Hindi makita ang worker.';
               errBox.classList.remove('hidden');
@@ -952,7 +877,6 @@ app.get('/worker', async (req, res) => {
             errBox.classList.remove('hidden');
           }
         }
-
         function logoutWorker() {
           document.getElementById('worker-dashboard').classList.add('hidden');
           document.getElementById('login-screen').classList.remove('hidden');
@@ -966,4 +890,4 @@ app.get('/worker', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`System running smoothly on port ${PORT}`));
+app.listen(PORT, () => console.log(`System running on port ${PORT}`));
