@@ -14,6 +14,7 @@ const pool = new Pool({
 
 async function ensureTables() {
   try {
+    // Siguraduhing tama ang istruktura ng mga tables at foreign keys
     await pool.query(`
       CREATE TABLE IF NOT EXISTS company_settings (
         id SERIAL PRIMARY KEY,
@@ -39,7 +40,7 @@ async function ensureTables() {
 
       CREATE TABLE IF NOT EXISTS attendance (
         id SERIAL PRIMARY KEY,
-        worker_id VARCHAR(50) REFERENCES workers(worker_id) ON DELETE CASCADE,
+        worker_id VARCHAR(50) NOT NULL,
         date DATE DEFAULT CURRENT_DATE,
         time_in TIMESTAMP,
         time_out TIMESTAMP,
@@ -48,7 +49,7 @@ async function ensureTables() {
 
       CREATE TABLE IF NOT EXISTS advances (
         id SERIAL PRIMARY KEY,
-        worker_id VARCHAR(50) REFERENCES workers(worker_id) ON DELETE CASCADE,
+        worker_id VARCHAR(50) NOT NULL,
         amount DECIMAL(10,2) NOT NULL,
         reason VARCHAR(255),
         status VARCHAR(20) DEFAULT 'Unpaid',
@@ -63,7 +64,7 @@ async function ensureTables() {
       );
     `);
 
-    // Auto-add column kung sakaling lumang table ang nandoon sa database
+    // Siguraduhing nandiyan ang profile_pic column sakaling lumang table ito
     await pool.query(`ALTER TABLE workers ADD COLUMN IF NOT EXISTS profile_pic TEXT DEFAULT '';`);
 
     const compCheck = await pool.query('SELECT count(*) FROM company_settings');
@@ -230,7 +231,7 @@ app.post('/api/announcements', async (req, res) => {
   res.json({ success: true });
 });
 
-// WORKER PORTAL API ENDPOINT (FIXED)
+// WORKER PORTAL API ENDPOINT
 app.get('/api/worker/:id', async (req, res) => {
   const workerId = req.params.id.trim();
   const company = await getCompanyInfo();
