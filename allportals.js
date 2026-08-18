@@ -280,8 +280,7 @@ app.get('/logout', (req, res) => {
 
 // ==================== ADMIN PORTAL ====================
 
-app.get('/admin/*', isAuthenticated('ADMIN'), async (req, res, next) => { next(); });
-
+app.get('/admin/(.*)', isAuthenticated('ADMIN'), async (req, res, next) => { next(); });
 const adminNav = (active) => `
   <nav>
     <a href="/admin/dashboard" class="${active==='dashboard'?'active':''}">Dashboard</a>
@@ -685,7 +684,7 @@ app.post('/admin/schedule', isAuthenticated('ADMIN'), async (req, res) => {
 
 // ==================== WORKER PORTAL ====================
 
-app.get('/worker/*', isAuthenticated('WORKER'), async (req, res, next) => { next(); });
+app.get('/worker/(.*)', isAuthenticated('WORKER'), async (req, res, next) => { next(); });
 
 const workerNav = (active) => `
   <nav>
@@ -812,7 +811,7 @@ app.get('/worker/announcements', isAuthenticated('WORKER'), async (req, res) => 
 
 // ==================== ATTENDANCE SCANNER PORTAL ====================
 
-app.get('/scanner/*', isAuthenticated('SCANNER'), async (req, res, next) => { next(); });
+app.get('/scanner/(.*)', isAuthenticated('SCANNER'), async (req, res, next) => { next(); });
 
 const scannerNav = (active) => `
   <nav>
