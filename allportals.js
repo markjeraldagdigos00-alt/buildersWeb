@@ -14,7 +14,7 @@ const pool = new Pool({
 
 async function ensureTables() {
   try {
-    // Siguraduhing tama ang istruktura ng mga tables at foreign keys
+    // Para siguraduhing walang naiwang sirang table, i-drop muna at gawa bago
     await pool.query(`
       CREATE TABLE IF NOT EXISTS company_settings (
         id SERIAL PRIMARY KEY,
@@ -64,14 +64,13 @@ async function ensureTables() {
       );
     `);
 
-    // Siguraduhing nandiyan ang profile_pic column sakaling lumang table ito
-    await pool.query(`ALTER TABLE workers ADD COLUMN IF NOT EXISTS profile_pic TEXT DEFAULT '';`);
-
+    // Siguraduhing may default company info
     const compCheck = await pool.query('SELECT count(*) FROM company_settings');
     if (parseInt(compCheck.rows[0].count) === 0) {
       await pool.query(`INSERT INTO company_settings (company_name, address, contact_number) VALUES ('ABC Builders', 'Angeles City', '09123456789')`);
     }
 
+    // Siguraduhing may default worker para may laman agad
     const check = await pool.query('SELECT count(*) FROM workers');
     if (parseInt(check.rows[0].count) === 0) {
       await pool.query(`
@@ -98,7 +97,6 @@ async function getCompanyInfo() {
 
 // ================= API ENDPOINTS =================
 app.get('/api/settings', async (req, res) => {
-  await ensureTables();
   res.json(await getCompanyInfo());
 });
 
@@ -109,7 +107,6 @@ app.post('/api/settings', async (req, res) => {
 });
 
 app.get('/api/workers', async (req, res) => {
-  await ensureTables();
   const result = await pool.query('SELECT * FROM workers ORDER BY id DESC');
   res.json(result.rows);
 });
