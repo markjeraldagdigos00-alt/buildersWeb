@@ -2,9 +2,9 @@
   "name": "construction-worker-inventory-system",
   "version": "1.0.0",
   "description": "Construction Worker and Inventory Management System with QR Attendance",
-  "main": "server.js",
+  "main": "allportals.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node allportals.js"
   },
   "dependencies": {
     "express": "^4.19.2",
