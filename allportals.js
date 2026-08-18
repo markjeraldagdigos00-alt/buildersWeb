@@ -14,9 +14,14 @@ const pool = new Pool({
 
 async function ensureTables() {
   try {
-    // Para siguraduhing walang naiwang sirang table, i-drop muna at gawa bago
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS company_settings (
+      DROP TABLE IF EXISTS attendance CASCADE;
+      DROP TABLE IF EXISTS advances CASCADE;
+      DROP TABLE IF EXISTS workers CASCADE;
+      DROP TABLE IF EXISTS company_settings CASCADE;
+      DROP TABLE IF EXISTS announcements CASCADE;
+
+      CREATE TABLE company_settings (
         id SERIAL PRIMARY KEY,
         company_name VARCHAR(150) DEFAULT 'ABC Builders',
         logo_url TEXT DEFAULT '',
@@ -24,7 +29,7 @@ async function ensureTables() {
         contact_number VARCHAR(50) DEFAULT '09123456789'
       );
 
-      CREATE TABLE IF NOT EXISTS workers (
+      CREATE TABLE workers (
         id SERIAL PRIMARY KEY,
         worker_id VARCHAR(50) UNIQUE NOT NULL,
         full_name VARCHAR(100) NOT NULL,
@@ -38,7 +43,7 @@ async function ensureTables() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
-      CREATE TABLE IF NOT EXISTS attendance (
+      CREATE TABLE attendance (
         id SERIAL PRIMARY KEY,
         worker_id VARCHAR(50) NOT NULL,
         date DATE DEFAULT CURRENT_DATE,
@@ -47,7 +52,7 @@ async function ensureTables() {
         status VARCHAR(20) DEFAULT 'Present'
       );
 
-      CREATE TABLE IF NOT EXISTS advances (
+      CREATE TABLE advances (
         id SERIAL PRIMARY KEY,
         worker_id VARCHAR(50) NOT NULL,
         amount DECIMAL(10,2) NOT NULL,
@@ -56,7 +61,7 @@ async function ensureTables() {
         date DATE DEFAULT CURRENT_DATE
       );
 
-      CREATE TABLE IF NOT EXISTS announcements (
+      CREATE TABLE announcements (
         id SERIAL PRIMARY KEY,
         title VARCHAR(150) NOT NULL,
         message TEXT NOT NULL,
@@ -64,22 +69,15 @@ async function ensureTables() {
       );
     `);
 
-    // Siguraduhing may default company info
-    const compCheck = await pool.query('SELECT count(*) FROM company_settings');
-    if (parseInt(compCheck.rows[0].count) === 0) {
-      await pool.query(`INSERT INTO company_settings (company_name, address, contact_number) VALUES ('ABC Builders', 'Angeles City', '09123456789')`);
-    }
+    await pool.query(`INSERT INTO company_settings (company_name, address, contact_number) VALUES ('ABC Builders', 'Angeles City', '09123456789')`);
 
-    // Siguraduhing may default worker para may laman agad
-    const check = await pool.query('SELECT count(*) FROM workers');
-    if (parseInt(check.rows[0].count) === 0) {
-      await pool.query(`
-        INSERT INTO workers (worker_id, full_name, contact_number, position, daily_rate, assigned_project, qr_code) VALUES
-        ('W-001', 'Juan Dela Cruz', '09123456789', 'Mason', 700.00, 'Building A', 'W-001'),
-        ('W-002', 'Pedro Santos', '09987654321', 'Carpenter', 650.00, 'Building B', 'W-002')
-        ON CONFLICT (worker_id) DO NOTHING;
-      `);
-    }
+    await pool.query(`
+      INSERT INTO workers (worker_id, full_name, contact_number, position, daily_rate, assigned_project, qr_code) VALUES
+      ('W-001', 'Juan Dela Cruz', '09123456789', 'Mason', 700.00, 'Building A', 'W-001'),
+      ('W-002', 'Pedro Santos', '09987654321', 'Carpenter', 650.00, 'Building B', 'W-002')
+    `);
+
+    console.log('Database tables successfully recreated on Render!');
   } catch (err) {
     console.error('DB Setup Error:', err.message);
   }
@@ -228,7 +226,6 @@ app.post('/api/announcements', async (req, res) => {
   res.json({ success: true });
 });
 
-// WORKER PORTAL API ENDPOINT
 app.get('/api/worker/:id', async (req, res) => {
   const workerId = req.params.id.trim();
   const company = await getCompanyInfo();
@@ -263,7 +260,6 @@ app.get('/api/worker/:id', async (req, res) => {
     res.status(500).json({ error: 'Database error: ' + err.message });
   }
 });
-
 
 // ================= 1. SCANNER PORTAL ( / ) =================
 app.get('/', async (req, res) => {
