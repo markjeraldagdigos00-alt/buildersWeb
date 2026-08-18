@@ -1,7 +1,7 @@
 {
   "name": "construction-worker-management-system",
   "version": "1.0.0",
-  "description": "Complete Construction Worker Management System with Admin, Worker, and Scanner Portals",
+  "description": "Complete Construction Worker Management System",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -10,9 +10,10 @@
     "bcryptjs": "^2.4.3",
     "express": "^4.19.2",
     "express-session": "^1.18.0",
-    "pg": "^8.11.3"
+    "pg": "^8.11.3",
+    "qrcode": "^1.5.3"
   },
   "engines": {
-    "node": ">=18.x"
+    "node": ">=18.0.0"
   }
 }
