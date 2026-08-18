@@ -114,7 +114,7 @@ async function ensureTables() {
         title VARCHAR(150) NOT NULL,
         description TEXT,
         severity VARCHAR(20) DEFAULT 'Low',
-        date DATE DATE DEFAULT CURRENT_DATE
+        date DATE DEFAULT CURRENT_DATE
       );
 
       CREATE TABLE IF NOT EXISTS admin_users (
@@ -143,8 +143,8 @@ async function ensureTables() {
     if (invCheck.rows.length === 0) {
       await pool.query(`
         INSERT INTO inventory (item_code, item_name, category, stock_qty, unit) VALUES
-        ('INV-001', 'Semento (Portland)', 'Materials', 150, bags),
-        ('INV-002', 'Deformed Steel Bar 16mm', 'Materials', 80, pcs)
+        ('INV-001', 'Semento (Portland)', 'Materials', 150, 'bags'),
+        ('INV-002', 'Deformed Steel Bar 16mm', 'Materials', 80, 'pcs')
       `);
     }
 
@@ -210,7 +210,7 @@ app.post('/api/inventory/transaction', async (req, res) => {
     const itemRes = await pool.query('SELECT * FROM inventory WHERE item_code = $1', [item_code]);
     if (itemRes.rows.length === 0) return res.status(404).json({ error: 'Item not found!' });
     
-    const currentStock = itemRes.rows.length > 0 ? itemRes.rows[0].stock_qty : 0;
+    const currentStock = itemRes.rows[0].stock_qty;
     let newStock = currentStock;
 
     if (action_type === 'STOCK IN') {
@@ -225,7 +225,7 @@ app.post('/api/inventory/transaction', async (req, res) => {
     await pool.query('UPDATE inventory SET stock_qty = $1 WHERE item_code = $2', [newStock, item_code]);
     await pool.query('INSERT INTO inventory_logs (item_code, action_type, quantity, remarks) VALUES ($1, $2, $3, $4)', [item_code, action_type, qty, remarks || '']);
     
-    res.json({ success: true, new_stock: newStock });
+    res.json({ success: true, item_name: itemRes.rows[0].item_name, action_type: action_type, new_stock: newStock });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -253,7 +253,7 @@ app.get('/api/scanner/dashboard', async (req, res) => {
 });
 
 app.post('/api/scanner/scan', async (req, res) => {
-  const { qr_code, scan_mode } = req.body; // scan_mode: 'TIME_IN_1', 'TIME_OUT_1', 'TIME_IN_2', 'TIME_OUT_2' o 'AUTO'
+  const { qr_code, scan_mode } = req.body; 
   const today = new Date().toISOString().split('T')[0];
 
   const workerRes = await pool.query('SELECT * FROM workers WHERE qr_code = $1 OR worker_id = $1', [qr_code]);
@@ -266,11 +266,8 @@ app.post('/api/scanner/scan', async (req, res) => {
   let attendanceRow = attRes.rows[0];
   let targetMode = scan_mode;
 
-  // Kung 'AUTO' ang mode, alamin ang susunod na posibleng i-scan (In1 -> Out1 -> In2 -> Out2)
   if (!targetMode || targetMode === 'AUTO') {
-    if (!attendanceRow) {
-      targetMode = 'TIME_IN_1';
-    } else if (!attendanceRow.time_in_1) {
+    if (!attendanceRow || !attendanceRow.time_in_1) {
       targetMode = 'TIME_IN_1';
     } else if (!attendanceRow.time_out_1) {
       targetMode = 'TIME_OUT_1';
@@ -431,7 +428,7 @@ app.get('/', async (req, res) => {
         </div>
         <div class="space-x-1 text-xs">
           <button onclick="switchTab('dashboard')" class="bg-slate-700 px-3 py-1.5 rounded-lg font-semibold">Dash</button>
-          <button onclick="switchTab('scan')" class="bg-amber-500 text-slate-900 font-bold px-3 py-1.5 rounded-lg">Scan QR</button>
+          <button onclick="switchTab('scan')" class="bg-amber-500 text-slate-900 font-bold px-3 py-1.5 rounded-lg">Scanner</button>
           <button onclick="switchTab('today')" class="bg-slate-700 px-3 py-1.5 rounded-lg font-semibold">Today</button>
         </div>
       </nav>
@@ -447,19 +444,44 @@ app.get('/', async (req, res) => {
           </div>
         </section>
 
+        <!-- SCANNER SECTION (ATTENDANCE & STOCK IN/OUT) -->
         <section id="tab-scan" class="hidden bg-slate-800 p-4 rounded-2xl text-center space-y-3 border border-slate-700 shadow-xl">
-          <h2 class="text-base font-bold text-amber-400">SCAN QR CODE (ATTENDANCE)</h2>
-          <div class="flex justify-center gap-1 text-[11px] font-bold">
-            <button onclick="setScanMode('AUTO')" id="btn-mode-AUTO" class="bg-amber-500 text-slate-900 px-2 py-1 rounded">Auto (4x)</button>
-            <button onclick="setScanMode('TIME_IN_1')" id="btn-mode-TIME_IN_1" class="bg-slate-700 px-2 py-1 rounded">In 1</button>
-            <button onclick="setScanMode('TIME_OUT_1')" id="btn-mode-TIME_OUT_1" class="bg-slate-700 px-2 py-1 rounded">Out 1</button>
-            <button onclick="setScanMode('TIME_IN_2')" id="btn-mode-TIME_IN_2" class="bg-slate-700 px-2 py-1 rounded">In 2</button>
-            <button onclick="setScanMode('TIME_OUT_2')" id="btn-mode-TIME_OUT_2" class="bg-slate-700 px-2 py-1 rounded">Out 2</button>
+          <h2 class="text-base font-bold text-amber-400">GATE & INVENTORY SCANNER</h2>
+          
+          <!-- Mode Switcher -->
+          <div class="grid grid-cols-2 gap-2">
+            <button onclick="setMainScannerMode('ATTENDANCE')" id="btn-main-att" class="bg-amber-500 text-slate-900 font-bold p-2 rounded-lg text-xs">👥 Attendance Scan</button>
+            <button onclick="setMainScannerMode('INVENTORY')" id="btn-main-inv" class="bg-slate-700 text-slate-300 font-bold p-2 rounded-lg text-xs">📦 Stock In / Out</button>
           </div>
+
+          <!-- Attendance Options -->
+          <div id="attendance-mode-controls" class="space-y-2">
+            <div class="flex justify-center gap-1 text-[11px] font-bold overflow-x-auto pb-1">
+              <button onclick="setScanMode('AUTO')" id="btn-mode-AUTO" class="bg-amber-500 text-slate-900 px-2 py-1 rounded">Auto (4x)</button>
+              <button onclick="setScanMode('TIME_IN_1')" id="btn-mode-TIME_IN_1" class="bg-slate-700 px-2 py-1 rounded">In 1</button>
+              <button onclick="setScanMode('TIME_OUT_1')" id="btn-mode-TIME_OUT_1" class="bg-slate-700 px-2 py-1 rounded">Out 1</button>
+              <button onclick="setScanMode('TIME_IN_2')" id="btn-mode-TIME_IN_2" class="bg-slate-700 px-2 py-1 rounded">In 2</button>
+              <button onclick="setScanMode('TIME_OUT_2')" id="btn-mode-TIME_OUT_2" class="bg-slate-700 px-2 py-1 rounded">Out 2</button>
+            </div>
+          </div>
+
+          <!-- Inventory Options -->
+          <div id="inventory-mode-controls" class="hidden space-y-2 bg-slate-700/50 p-3 rounded-xl border border-slate-600">
+            <div class="grid grid-cols-2 gap-2">
+              <button onclick="setInvAction('STOCK IN')" id="btn-inv-in" class="bg-emerald-600 text-white font-bold py-1.5 rounded text-xs">STOCK IN (+)</button>
+              <button onclick="setInvAction('STOCK OUT')" id="btn-inv-out" class="bg-slate-700 text-slate-300 font-bold py-1.5 rounded text-xs">STOCK OUT (-)</button>
+            </div>
+            <div class="flex gap-2">
+              <input type="number" id="inv-scan-qty" value="1" min="1" placeholder="Qty" class="bg-slate-700 border border-slate-600 p-2 rounded w-24 text-center font-bold text-xs">
+              <input type="text" id="inv-scan-remarks" placeholder="Remarks / Project (Optional)" class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-xs">
+            </div>
+          </div>
+
           <div id="reader" class="overflow-hidden rounded-xl bg-black border-2 border-amber-500 mx-auto w-full max-w-xs"></div>
+          
           <div class="flex gap-2 max-w-xs mx-auto">
-            <input type="text" id="manual-qr" placeholder="O i-type ID (e.g. W-001)" class="bg-slate-700 border border-slate-600 p-2 rounded-lg w-full text-center text-white font-bold uppercase text-xs">
-            <button onclick="processScan(document.getElementById('manual-qr').value)" class="bg-amber-500 text-slate-900 font-bold px-3 rounded-lg text-xs">OK</button>
+            <input type="text" id="manual-qr" placeholder="O i-type ID / Item Code..." class="bg-slate-700 border border-slate-600 p-2 rounded-lg w-full text-center text-white font-bold uppercase text-xs">
+            <button onclick="processScanInput(document.getElementById('manual-qr').value)" class="bg-amber-500 text-slate-900 font-bold px-3 rounded-lg text-xs">OK</button>
           </div>
           <div id="scan-result" class="hidden p-3 rounded-xl font-bold text-left space-y-1 text-xs"></div>
         </section>
@@ -476,7 +498,27 @@ app.get('/', async (req, res) => {
       </main>
       <script>
         let html5QrCode = null;
+        let currentMainMode = 'ATTENDANCE'; // 'ATTENDANCE' o 'INVENTORY'
         let currentScanMode = 'AUTO';
+        let currentInvAction = 'STOCK IN';
+
+        function setMainScannerMode(mode) {
+          currentMainMode = mode;
+          if(mode === 'ATTENDANCE') {
+            document.getElementById('btn-main-att').className = 'bg-amber-500 text-slate-900 font-bold p-2 rounded-lg text-xs';
+            document.getElementById('btn-main-inv').className = 'bg-slate-700 text-slate-300 font-bold p-2 rounded-lg text-xs';
+            document.getElementById('attendance-mode-controls').classList.remove('hidden');
+            document.getElementById('inventory-mode-controls').classList.add('hidden');
+            document.getElementById('manual-qr').placeholder = 'O i-type Worker ID (e.g. W-001)';
+          } else {
+            document.getElementById('btn-main-inv').className = 'bg-amber-500 text-slate-900 font-bold p-2 rounded-lg text-xs';
+            document.getElementById('btn-main-att').className = 'bg-slate-700 text-slate-300 font-bold p-2 rounded-lg text-xs';
+            document.getElementById('inventory-mode-controls').classList.remove('hidden');
+            document.getElementById('attendance-mode-controls').classList.add('hidden');
+            document.getElementById('manual-qr').placeholder = 'O i-type Item Code (e.g. INV-001)';
+          }
+          document.getElementById('scan-result').classList.add('hidden');
+        }
 
         function setScanMode(mode) {
           currentScanMode = mode;
@@ -486,6 +528,17 @@ app.get('/', async (req, res) => {
               btn.className = m === mode ? 'bg-amber-500 text-slate-900 px-2 py-1 rounded font-bold' : 'bg-slate-700 text-slate-300 px-2 py-1 rounded';
             }
           });
+        }
+
+        function setInvAction(action) {
+          currentInvAction = action;
+          if(action === 'STOCK IN') {
+            document.getElementById('btn-inv-in').className = 'bg-emerald-600 text-white font-bold py-1.5 rounded text-xs';
+            document.getElementById('btn-inv-out').className = 'bg-slate-700 text-slate-300 font-bold py-1.5 rounded text-xs';
+          } else {
+            document.getElementById('btn-inv-out').className = 'bg-red-600 text-white font-bold py-1.5 rounded text-xs';
+            document.getElementById('btn-inv-in').className = 'bg-slate-700 text-slate-300 font-bold py-1.5 rounded text-xs';
+          }
         }
 
         function switchTab(tab) {
@@ -498,6 +551,7 @@ app.get('/', async (req, res) => {
           if(tab === 'today') loadToday();
           if(tab !== 'scan' && html5QrCode) html5QrCode.stop().catch(e => {});
         }
+
         async function loadDashboard() {
           try {
             const res = await fetch('/api/scanner/dashboard'); const data = await res.json();
@@ -506,30 +560,59 @@ app.get('/', async (req, res) => {
             document.getElementById('d-timein1').innerText = data.total_time_in_1;
           } catch(e) {}
         }
+
         function startCamera() {
           if (!html5QrCode) html5QrCode = new Html5Qrcode("reader");
-          html5QrCode.start({ facingMode: "environment" }, { fps: 15, qrbox: { width: 200, height: 200 } }, text => processScan(text), err => {}).catch(err => {});
+          html5QrCode.start({ facingMode: "environment" }, { fps: 15, qrbox: { width: 200, height: 200 } }, text => processScanInput(text), err => {}).catch(err => {});
         }
-        async function processScan(code) {
+
+        async function processScanInput(code) {
           if (!code) return;
           const box = document.getElementById('scan-result');
           box.classList.remove('hidden', 'bg-emerald-900', 'bg-red-900', 'text-emerald-200', 'text-red-200');
-          try {
-            const res = await fetch('/api/scanner/scan', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({qr_code: code.trim(), scan_mode: currentScanMode}) });
-            const data = await res.json();
-            if(res.ok) {
-              box.classList.add('bg-emerald-900', 'text-emerald-200');
-              box.innerHTML = '<div class="text-emerald-400 font-extrabold text-sm">✓ ' + data.status_type + ' RECORDED</div><div>Name: ' + data.name + '</div><div>Position: ' + data.position + '</div><div>Time: ' + data.time + '</div>';
-            } else {
+          
+          if(currentMainMode === 'ATTENDANCE') {
+            try {
+              const res = await fetch('/api/scanner/scan', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({qr_code: code.trim(), scan_mode: currentScanMode}) });
+              const data = await res.json();
+              if(res.ok) {
+                box.classList.add('bg-emerald-900', 'text-emerald-200');
+                box.innerHTML = '<div class="text-emerald-400 font-extrabold text-sm">✓ ' + data.status_type + ' RECORDED</div><div>Name: ' + data.name + '</div><div>Position: ' + data.position + '</div><div>Time: ' + data.time + '</div>';
+              } else {
+                box.classList.add('bg-red-900', 'text-red-200');
+                box.innerHTML = '<div class="text-red-400 font-bold">X ERROR</div><div>' + data.error + '</div>';
+              }
+            } catch(e) {
               box.classList.add('bg-red-900', 'text-red-200');
-              box.innerHTML = '<div class="text-red-400 font-bold">X ERROR</div><div>' + data.error + '</div>';
+              box.innerHTML = '<div class="text-red-400 font-bold">X ERROR</div><div>Connection problem.</div>';
             }
-          } catch(e) {
-            box.classList.add('bg-red-900', 'text-red-200');
-            box.innerHTML = '<div class="text-red-400 font-bold">X ERROR</div><div>Connection problem.</div>';
+          } else {
+            // Inventory Stock In / Out
+            const qty = document.getElementById('inv-scan-qty').value || 1;
+            const remarks = document.getElementById('inv-scan-remarks').value || '';
+            try {
+              const res = await fetch('/api/inventory/transaction', { 
+                method: 'POST', 
+                headers: {'Content-Type':'application/json'}, 
+                body: JSON.stringify({item_code: code.trim(), action_type: currentInvAction, quantity: qty, remarks: remarks}) 
+              });
+              const data = await res.json();
+              if(res.ok) {
+                box.classList.add('bg-emerald-900', 'text-emerald-200');
+                box.innerHTML = '<div class="text-emerald-400 font-extrabold text-sm">✓ ' + data.action_type + ' SUCCESS</div><div>Item: ' + data.item_name + '</div><div>Qty: ' + qty + '</div><div>New Stock: <b>' + data.new_stock + '</b></div>';
+                document.getElementById('inv-scan-remarks').value = '';
+              } else {
+                box.classList.add('bg-red-900', 'text-red-200');
+                box.innerHTML = '<div class="text-red-400 font-bold">X ERROR</div><div>' + data.error + '</div>';
+              }
+            } catch(e) {
+              box.classList.add('bg-red-900', 'text-red-200');
+              box.innerHTML = '<div class="text-red-400 font-bold">X ERROR</div><div>Connection problem.</div>';
+            }
           }
           document.getElementById('manual-qr').value = '';
         }
+
         async function loadToday() {
           try {
             const res = await fetch('/api/scanner/today'); const data = await res.json();
@@ -563,8 +646,6 @@ app.get('/admin', async (req, res) => {
       <script src="https://cdn.tailwindcss.com"></script>
     </head>
     <body class="bg-slate-900 text-white min-h-screen flex flex-col md:flex-row">
-      
-      <!-- SIDEBAR NAVIGATION -->
       <aside class="w-full md:w-64 bg-slate-800 border-r border-slate-700 flex-shrink-0 p-4 space-y-4">
         <div class="flex items-center gap-3 border-b border-slate-700 pb-3">
           ${company.logo_url ? `<img src="${company.logo_url}" class="w-8 h-8 rounded-full object-cover border border-amber-400">` : '🏗️'}
@@ -573,7 +654,6 @@ app.get('/admin', async (req, res) => {
             <p class="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Admin Panel</p>
           </div>
         </div>
-
         <nav class="space-y-1 text-xs font-semibold overflow-x-auto md:overflow-y-auto max-h-[75vh] flex md:block gap-2 md:gap-0 pb-2">
           <button onclick="switchAdminTab('dash')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 bg-amber-500 text-slate-900 font-bold">🏠 Dashboard</button>
           <button onclick="switchAdminTab('workers')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">👷 Workers</button>
@@ -591,11 +671,7 @@ app.get('/admin', async (req, res) => {
           <button onclick="switchAdminTab('settings')" class="adm-btn w-full text-left p-2.5 rounded-lg flex items-center gap-2 hover:bg-slate-700 text-slate-300">⚙️ Settings</button>
         </nav>
       </aside>
-
-      <!-- MAIN CONTENT AREA -->
       <main class="flex-1 p-4 overflow-y-auto">
-        
-        <!-- 1. DASHBOARD -->
         <section id="adm-dash" class="space-y-4">
           <h2 class="text-base font-bold text-amber-400">🏠 Dashboard Overview</h2>
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
@@ -605,8 +681,6 @@ app.get('/admin', async (req, res) => {
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700"><p class="text-xs text-slate-400">Total Advance</p><h3 id="stat-advance" class="text-2xl font-bold text-purple-400 mt-1">₱0</h3></div>
           </div>
         </section>
-
-        <!-- 2. WORKERS -->
         <section id="adm-workers" class="hidden space-y-4">
           <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
             <h2 class="text-sm font-bold text-amber-400">👷 Add / Update Worker</h2>
@@ -628,8 +702,6 @@ app.get('/admin', async (req, res) => {
             </table></div>
           </div>
         </section>
-
-        <!-- 3. QR ATTENDANCE (4-TIMES) -->
         <section id="adm-qr" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">📱 QR Attendance Logs (4-Times Daily)</h2>
           <div class="overflow-x-auto"><table class="w-full text-left text-xs">
@@ -637,8 +709,6 @@ app.get('/admin', async (req, res) => {
             <tbody id="attendance-table" class="divide-y divide-slate-700"></tbody>
           </table></div>
         </section>
-
-        <!-- 4. STOCK IN / OUT (INVENTORY) -->
         <section id="adm-inventory" class="hidden space-y-4">
           <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
             <h2 class="text-sm font-bold text-amber-400">📦 Inventory Stock In / Stock Out</h2>
@@ -661,29 +731,21 @@ app.get('/admin', async (req, res) => {
             </table></div>
           </div>
         </section>
-
-        <!-- 5. PROJECTS -->
         <section id="adm-projects" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">🏢 Projects Management</h2>
           <p class="text-xs text-slate-400">Manage site locations and active construction projects.</p>
           <div class="p-3 bg-slate-700/50 rounded-lg text-xs text-slate-300">Sample Active Projects: <b>Building A (Angeles City)</b>, <b>Building B (Clark)</b></div>
         </section>
-
-        <!-- 6. SCHEDULES -->
         <section id="adm-schedules" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">🕒 Work Schedules</h2>
           <p class="text-xs text-slate-400">Set standard work shifts and overtime schedules.</p>
           <div class="p-3 bg-slate-700/50 rounded-lg text-xs text-slate-300">Standard Shift: 8:00 AM - 5:00 PM (Monday to Saturday)</div>
         </section>
-
-        <!-- 7. PAYROLL -->
         <section id="adm-payroll" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">💰 Payroll Processing</h2>
           <p class="text-xs text-slate-400">Compute total salaries, deductions, and weekly payslips.</p>
           <div class="p-3 bg-slate-700/50 rounded-lg text-xs text-slate-300">Automatic computation active: Daily Rate x Days Worked - Cash Advances.</div>
         </section>
-
-        <!-- 8. CASH ADVANCE -->
         <section id="adm-advance" class="hidden space-y-4">
           <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
             <h2 class="text-sm font-bold text-amber-400">💵 Add Cash Advance</h2>
@@ -702,15 +764,11 @@ app.get('/admin', async (req, res) => {
             </table></div>
           </div>
         </section>
-
-        <!-- 9. LEAVE REQUESTS -->
         <section id="adm-leave" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">📝 Leave Requests</h2>
           <p class="text-xs text-slate-400">Approve or reject leave applications from workers.</p>
           <div class="p-3 bg-slate-700/50 rounded-lg text-xs text-slate-400 text-center">No pending leave requests.</div>
         </section>
-
-        <!-- 10. ANNOUNCEMENTS -->
         <section id="adm-announce" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">📢 Post Announcements</h2>
           <form onsubmit="postAnnouncement(event)" class="space-y-2">
@@ -719,29 +777,21 @@ app.get('/admin', async (req, res) => {
             <button type="submit" class="bg-blue-600 hover:bg-blue-500 font-bold p-2 rounded w-full text-xs">Publish Announcement</button>
           </form>
         </section>
-
-        <!-- 11. SAFETY MANAGEMENT -->
         <section id="adm-safety" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">🦺 Safety Management</h2>
           <p class="text-xs text-slate-400">Safety compliance, incident reports, and PPE tracking.</p>
           <div class="p-3 bg-slate-700/50 rounded-lg text-xs text-emerald-400 font-bold">✓ 0 Safety Incidents reported this month.</div>
         </section>
-
-        <!-- 12. REPORTS -->
         <section id="adm-reports" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">📄 System Reports</h2>
           <p class="text-xs text-slate-400">Export attendance summary, payroll, and advance logs.</p>
           <button onclick="alert('Export feature ready.')" class="bg-slate-700 hover:bg-slate-600 border border-slate-600 px-3 py-2 rounded text-xs font-bold">📥 Export PDF / CSV Summary</button>
         </section>
-
-        <!-- 13. USER MANAGEMENT -->
         <section id="adm-users" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">👤 User Management</h2>
           <p class="text-xs text-slate-400">Manage admin roles and gate scanner credentials.</p>
           <div class="p-3 bg-slate-700/50 rounded-lg text-xs text-slate-300">Main Admin: <b>admin@abcbuilders.com</b></div>
         </section>
-
-        <!-- 14. SETTINGS -->
         <section id="adm-settings" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">⚙️ Company Settings</h2>
           <form onsubmit="saveSettings(event)" class="space-y-2">
@@ -752,9 +802,7 @@ app.get('/admin', async (req, res) => {
             <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 font-bold p-2 rounded w-full text-xs">Save Settings</button>
           </form>
         </section>
-
       </main>
-
       <script>
         const tabs = ['dash', 'workers', 'qr', 'inventory', 'projects', 'schedules', 'payroll', 'advance', 'leave', 'announce', 'safety', 'reports', 'users', 'settings'];
 
@@ -838,7 +886,6 @@ app.get('/admin', async (req, res) => {
           e.preventDefault();
           const btn = document.getElementById('save-worker-btn');
           btn.disabled = true; btn.innerText = 'Saving...';
-          
           const body = {
             worker_id: document.getElementById('wid').value.trim(),
             full_name: document.getElementById('wname').value.trim(),
@@ -847,7 +894,6 @@ app.get('/admin', async (req, res) => {
             daily_rate: document.getElementById('wrate').value.trim(),
             assigned_project: document.getElementById('wproject').value.trim()
           };
-
           try {
             const res = await fetch('/api/workers', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
             const result = await res.json();
@@ -926,8 +972,6 @@ app.get('/worker', async (req, res) => {
     </head>
     <body class="bg-slate-900 text-white min-h-screen p-3 flex flex-col items-center justify-center">
       <div class="max-w-md w-full bg-slate-800 p-5 rounded-2xl shadow-xl space-y-4 border border-slate-700">
-        
-        <!-- LOGIN SCREEN -->
         <div id="login-screen" class="space-y-3 text-center">
           ${company.logo_url ? `<img src="${company.logo_url}" class="w-12 h-12 rounded-full object-cover mx-auto border-2 border-purple-400">` : '👷'}
           <h1 class="text-base font-bold text-purple-400">${company.company_name}</h1>
@@ -938,10 +982,7 @@ app.get('/worker', async (req, res) => {
           </div>
           <div id="login-error" class="text-red-400 text-xs font-bold hidden"></div>
         </div>
-
-        <!-- DASHBOARD CONTAINER -->
         <div id="worker-dashboard" class="hidden space-y-4">
-          
           <div class="text-center pb-3 border-b border-slate-700 flex items-center justify-between">
             <div class="flex items-center gap-2 text-left">
               ${company.logo_url ? `<img src="${company.logo_url}" class="w-8 h-8 rounded-full object-cover border border-purple-400">` : '🏗️'}
@@ -954,15 +995,12 @@ app.get('/worker', async (req, res) => {
               <div id="w-name" class="font-bold text-sm text-white">-</div>
             </div>
           </div>
-
-          <!-- WORKER TABS -->
           <div id="tab-home" class="worker-tab space-y-3">
             <div class="bg-slate-700/50 p-4 rounded-xl border border-slate-600 text-center space-y-2">
               <div class="text-xs text-slate-400 font-semibold uppercase">Today's Attendance Status (4x)</div>
               <div id="w-today-status" class="text-base font-extrabold text-red-400">WALA PA / ABSENT</div>
             </div>
           </div>
-
           <div id="tab-qr" class="worker-tab hidden space-y-3 text-center">
             <div class="text-xs font-bold text-purple-400 uppercase">My QR Code</div>
             <div class="bg-white p-4 inline-block rounded-xl shadow-inner">
@@ -970,7 +1008,6 @@ app.get('/worker', async (req, res) => {
             </div>
             <div class="text-xs text-slate-300 font-mono font-bold" id="w-qr-text">-</div>
           </div>
-
           <div id="tab-attendance" class="worker-tab hidden space-y-2">
             <div class="text-xs font-bold text-purple-400 uppercase">Attendance History</div>
             <div class="overflow-x-auto max-h-48">
@@ -980,7 +1017,6 @@ app.get('/worker', async (req, res) => {
               </table>
             </div>
           </div>
-
           <div id="tab-advance" class="worker-tab hidden space-y-2">
             <div class="text-xs font-bold text-purple-400 uppercase">Advances / Cash Advance</div>
             <div class="overflow-x-auto max-h-48">
@@ -990,7 +1026,6 @@ app.get('/worker', async (req, res) => {
               </table>
             </div>
           </div>
-
           <div id="tab-salary" class="worker-tab hidden space-y-2">
             <div class="text-xs font-bold text-purple-400 uppercase">Salary Breakdown</div>
             <div class="bg-slate-700/50 p-3 rounded-xl border border-slate-600 space-y-1.5 text-xs">
@@ -1001,8 +1036,6 @@ app.get('/worker', async (req, res) => {
               <div class="flex justify-between border-t border-slate-600 pt-1 font-extrabold text-sm text-emerald-400"><span>Net Salary:</span> <span id="s-net">₱0</span></div>
             </div>
           </div>
-
-          <!-- WORKER BOTTOM MENU -->
           <div class="grid grid-cols-6 gap-1 pt-2 border-t border-slate-700 text-[10px]">
             <button onclick="switchWorkerTab('home')" class="worker-nav-btn bg-purple-600 text-white font-bold p-1.5 rounded text-center">🏠<br>Home</button>
             <button onclick="switchWorkerTab('qr')" class="worker-nav-btn bg-slate-700 text-slate-300 p-1.5 rounded text-center">📱<br>QR</button>
@@ -1011,17 +1044,13 @@ app.get('/worker', async (req, res) => {
             <button onclick="switchWorkerTab('salary')" class="worker-nav-btn bg-slate-700 text-slate-300 p-1.5 rounded text-center">💰<br>Salary</button>
             <button onclick="logoutWorker()" class="bg-red-900/60 text-red-300 p-1.5 rounded text-center font-bold">🚪<br>Exit</button>
           </div>
-
         </div>
       </div>
-
       <script>
         let globalWorkerData = null;
-
         function switchWorkerTab(tabName) {
           document.querySelectorAll('.worker-tab').forEach(el => el.classList.add('hidden'));
           document.getElementById('tab-' + tabName).classList.remove('hidden');
-          
           document.querySelectorAll('.worker-nav-btn').forEach(btn => {
             btn.classList.remove('bg-purple-600', 'text-white');
             btn.classList.add('bg-slate-700', 'text-slate-300');
@@ -1029,13 +1058,11 @@ app.get('/worker', async (req, res) => {
           event.currentTarget.classList.remove('bg-slate-700', 'text-slate-300');
           event.currentTarget.classList.add('bg-purple-600', 'text-white');
         }
-
         async function checkWorker() {
           const id = document.getElementById('worker-id-input').value.trim();
           const errBox = document.getElementById('login-error');
           if(!id) return;
           errBox.classList.add('hidden');
-          
           try {
             const res = await fetch('/api/worker/' + encodeURIComponent(id));
             const data = await res.json();
@@ -1043,21 +1070,17 @@ app.get('/worker', async (req, res) => {
               globalWorkerData = data;
               document.getElementById('login-screen').classList.add('hidden');
               document.getElementById('worker-dashboard').classList.remove('hidden');
-
               document.getElementById('w-name').innerText = data.worker.full_name;
               document.getElementById('w-pos-id').innerText = data.worker.position + ' | ID: ' + data.worker.worker_id;
-              
               let attStatusHTML = '<span class="text-red-400">WALA PA / ABSENT</span>';
               if(data.today_attendance) {
                 let t1 = data.today_attendance.time_in_1 ? new Date(data.today_attendance.time_in_1).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '-';
                 attStatusHTML = '<span class="text-emerald-400">PRESENT</span><br><span class="text-xs text-slate-300">In 1: ' + t1 + '</span>';
               }
               document.getElementById('w-today-status').innerHTML = attStatusHTML;
-
               document.getElementById('w-qr-text').innerText = data.worker.qr_code;
               document.getElementById('qrcode').innerHTML = '';
               new QRCode(document.getElementById("qrcode"), { text: data.worker.qr_code, width: 128, height: 128 });
-
               const attTbody = document.getElementById('w-attendance-table');
               attTbody.innerHTML = '';
               if(data.attendance.length === 0) {
@@ -1071,7 +1094,6 @@ app.get('/worker', async (req, res) => {
                   attTbody.innerHTML += '<tr><td class="p-1.5">' + att.date + '</td><td class="p-1.5 text-blue-400">' + t1 + '</td><td class="p-1.5 text-purple-400">' + o1 + '</td><td class="p-1.5 text-blue-300">' + t2 + '</td><td class="p-1.5 text-purple-300">' + o2 + '</td></tr>';
                 });
               }
-
               const advTbody = document.getElementById('w-advance-table');
               advTbody.innerHTML = '';
               if(data.advances.length === 0) {
@@ -1081,13 +1103,11 @@ app.get('/worker', async (req, res) => {
                   advTbody.innerHTML += '<tr><td class="p-1.5">' + adv.date + '</td><td class="p-1.5 text-purple-400 font-bold">₱' + adv.amount + '</td><td class="p-1.5 text-slate-300">' + (adv.reason || '—') + '</td><td class="p-1.5">' + adv.status + '</td></tr>';
                 });
               }
-
               document.getElementById('s-rate').innerText = '₱' + data.salary.daily_rate.toLocaleString();
               document.getElementById('s-days').innerText = data.salary.days_worked + ' days';
               document.getElementById('s-total').innerText = '₱' + data.salary.total_salary.toLocaleString();
               document.getElementById('s-advance').innerText = '-₱' + data.salary.advance.toLocaleString();
               document.getElementById('s-net').innerText = '₱' + data.salary.net_salary.toLocaleString();
-
             } else {
               errBox.innerText = data.error || 'Hindi makita ang worker.';
               errBox.classList.remove('hidden');
@@ -1097,7 +1117,6 @@ app.get('/worker', async (req, res) => {
             errBox.classList.remove('hidden');
           }
         }
-
         function logoutWorker() {
           document.getElementById('worker-dashboard').classList.add('hidden');
           document.getElementById('login-screen').classList.remove('hidden');
