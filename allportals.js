@@ -1,4 +1,3 @@
-
 const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
@@ -85,7 +84,8 @@ async function ensureTables() {
         start_date DATE NOT NULL,
         end_date DATE NOT NULL,
         reason TEXT,
-        status VARCHAR(20) DEFAULT 'Pending'
+        status VARCHAR(20) DEFAULT 'Pending',
+        date DATE DEFAULT CURRENT_DATE
       );
 
       CREATE TABLE IF NOT EXISTS safety_logs (
@@ -109,6 +109,13 @@ async function ensureTables() {
         username VARCHAR(50) UNIQUE NOT NULL,
         role VARCHAR(50) DEFAULT 'Admin',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS payroll_records (
+        id SERIAL PRIMARY KEY,
+        worker_id VARCHAR(50) NOT NULL,
+        amount_paid DECIMAL(10,2) NOT NULL,
+        date_paid TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
 
@@ -272,6 +279,77 @@ app.post('/api/announcements', async (req, res) => {
   res.json({ success: true });
 });
 
+// Leave Request Endpoints
+app.get('/api/leave-requests', async (req, res) => {
+  const result = await pool.query(`
+    SELECT l.*, w.full_name FROM leave_requests l 
+    JOIN workers w ON l.worker_id = w.worker_id 
+    ORDER BY l.id DESC
+  `);
+  res.json(result.rows);
+});
+
+app.post('/api/leave-requests', async (req, res) => {
+  const { worker_id, leave_type, start_date, end_date, reason } = req.body;
+  try {
+    await pool.query(
+      'INSERT INTO leave_requests (worker_id, leave_type, start_date, end_date, reason) VALUES ($1, $2, $3, $4, $5)',
+      [worker_id, leave_type, start_date, end_date, reason]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Payroll & Salary Reset API
+app.get('/api/admin/payroll-list', async (req, res) => {
+  try {
+    const workers = await pool.query('SELECT * FROM workers ORDER BY id DESC');
+    const payrollData = [];
+    for (let w of workers.rows) {
+      const daysRes = await pool.query('SELECT COUNT(*) FROM attendance WHERE worker_id = $1 AND time_in IS NOT NULL', [w.worker_id]);
+      const daysWorked = parseInt(daysRes.rows[0].count) || 0;
+      const totalSalary = daysWorked * parseFloat(w.daily_rate);
+      
+      const advRes = await pool.query('SELECT SUM(amount) as total FROM advances WHERE worker_id = $1 AND status = $2', [w.worker_id, 'Unpaid']);
+      const totalAdvance = parseFloat(advRes.rows[0].total || 0);
+      const netSalary = totalSalary - totalAdvance;
+
+      payrollData.push({
+        worker_id: w.worker_id,
+        full_name: w.full_name,
+        position: w.position,
+        daily_rate: w.daily_rate,
+        days_worked: daysWorked,
+        total_salary: totalSalary,
+        advance: totalAdvance,
+        net_salary: netSalary < 0 ? 0 : netSalary
+      });
+    }
+    res.json(payrollData);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/pay-worker', async (req, res) => {
+  const { worker_id, amount_paid } = req.body;
+  try {
+    // 1. Record payment history
+    await pool.query('INSERT INTO payroll_records (worker_id, amount_paid) VALUES ($1, $2)', [worker_id, amount_paid]);
+    
+    // 2. Clear or mark attendance/advances as settled if needed or reset salary tracking by clearing attendance logs
+    // (Kung ang sahod ay binubuo ng counted attendance, para bumalik sa 0 ang accumulated salary, puwede nating i-archive o markahan ang attendance, o i-reset ang counter)
+    await pool.query("UPDATE attendance SET status = 'Paid' WHERE worker_id = $1 AND status = 'Present'", [worker_id]);
+    await pool.query("UPDATE advances SET status = 'Paid' WHERE worker_id = $1 AND status = 'Unpaid'", [worker_id]);
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/worker/:id', async (req, res) => {
   const workerId = req.params.id.trim();
   const company = await getCompanyInfo();
@@ -287,8 +365,9 @@ app.get('/api/worker/:id', async (req, res) => {
     const advancesRes = await pool.query('SELECT * FROM advances WHERE worker_id = $1 ORDER BY id DESC', [worker.worker_id]);
     const totalAdvancesRes = await pool.query('SELECT SUM(amount) as total FROM advances WHERE worker_id = $1 AND status = $2', [worker.worker_id, 'Unpaid']);
     const annRes = await pool.query('SELECT * FROM announcements ORDER BY id DESC LIMIT 5');
+    const leavesRes = await pool.query('SELECT * FROM leave_requests WHERE worker_id = $1 ORDER BY id DESC', [worker.worker_id]);
 
-    const daysWorkedRes = await pool.query('SELECT COUNT(*) FROM attendance WHERE worker_id = $1 AND time_in IS NOT NULL', [worker.worker_id]);
+    const daysWorkedRes = await pool.query("SELECT COUNT(*) FROM attendance WHERE worker_id = $1 AND time_in IS NOT NULL AND status != 'Paid'", [worker.worker_id]);
     const daysWorked = parseInt(daysWorkedRes.rows[0].count) || 0;
     const dailyRate = parseFloat(worker.daily_rate) || 0;
     const totalSalary = daysWorked * dailyRate;
@@ -301,7 +380,8 @@ app.get('/api/worker/:id', async (req, res) => {
       today_attendance: todayAtt.rows[0] || null,
       attendance: attendanceHistory.rows,
       advances: advancesRes.rows,
-      salary: { daily_rate: dailyRate, days_worked: daysWorked, total_salary: totalSalary, advance: totalAdvance, net_salary: netSalary },
+      leave_requests: leavesRes.rows,
+      salary: { daily_rate: dailyRate, days_worked: daysWorked, total_salary: totalSalary, advance: totalAdvance, net_salary: netSalary < 0 ? 0 : netSalary },
       announcements: annRes.rows
     });
   } catch (err) {
@@ -441,10 +521,16 @@ app.get('/admin', async (req, res) => {
       <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>${company.company_name} - Full Admin Portal</title>
       <script src="https://cdn.tailwindcss.com"></script>
+      <style>
+        @media print {
+          body * { visibility: hidden; }
+          #printable-payroll, #printable-payroll * { visibility: visible; }
+          #printable-payroll { position: absolute; left: 0; top: 0; width: 100%; background: white; color: black; }
+        }
+      </style>
     </head>
     <body class="bg-slate-900 text-white min-h-screen flex flex-col md:flex-row">
       
-      <!-- SIDEBAR NAVIGATION (14 FEATURES) -->
       <aside class="w-full md:w-64 bg-slate-800 border-r border-slate-700 flex-shrink-0 p-4 space-y-4">
         <div class="flex items-center gap-3 border-b border-slate-700 pb-3">
           ${company.logo_url ? `<img src="${company.logo_url}" class="w-8 h-8 rounded-full object-cover border border-amber-400">` : '🏗️'}
@@ -472,10 +558,8 @@ app.get('/admin', async (req, res) => {
         </nav>
       </aside>
 
-      <!-- MAIN CONTENT AREA -->
       <main class="flex-1 p-4 overflow-y-auto">
         
-        <!-- 1. DASHBOARD -->
         <section id="adm-dash" class="space-y-4">
           <h2 class="text-base font-bold text-amber-400">🏠 Dashboard Overview</h2>
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
@@ -486,7 +570,6 @@ app.get('/admin', async (req, res) => {
           </div>
         </section>
 
-        <!-- 2. WORKERS -->
         <section id="adm-workers" class="hidden space-y-4">
           <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
             <h2 class="text-sm font-bold text-amber-400">👷 Add / Update Worker</h2>
@@ -509,7 +592,6 @@ app.get('/admin', async (req, res) => {
           </div>
         </section>
 
-        <!-- 3. QR ATTENDANCE -->
         <section id="adm-qr" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">📱 QR Attendance Logs</h2>
           <div class="overflow-x-auto"><table class="w-full text-left text-xs">
@@ -518,28 +600,44 @@ app.get('/admin', async (req, res) => {
           </table></div>
         </section>
 
-        <!-- 4. PROJECTS -->
         <section id="adm-projects" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">🏢 Projects Management</h2>
           <p class="text-xs text-slate-400">Manage site locations and active construction projects.</p>
           <div class="p-3 bg-slate-700/50 rounded-lg text-xs text-slate-300">Sample Active Projects: <b>Building A (Angeles City)</b>, <b>Building B (Clark)</b></div>
         </section>
 
-        <!-- 5. SCHEDULES -->
         <section id="adm-schedules" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">🕒 Work Schedules</h2>
           <p class="text-xs text-slate-400">Set standard work shifts and overtime schedules.</p>
           <div class="p-3 bg-slate-700/50 rounded-lg text-xs text-slate-300">Standard Shift: 8:00 AM - 5:00 PM (Monday to Saturday)</div>
         </section>
 
-        <!-- 6. PAYROLL -->
-        <section id="adm-payroll" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
-          <h2 class="text-sm font-bold text-amber-400">💰 Payroll Processing</h2>
-          <p class="text-xs text-slate-400">Compute total salaries, deductions, and weekly payslips.</p>
-          <div class="p-3 bg-slate-700/50 rounded-lg text-xs text-slate-300">Automatic computation active: Daily Rate x Days Worked - Cash Advances.</div>
+        <section id="adm-payroll" class="hidden space-y-4">
+          <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3" id="printable-payroll">
+            <div class="flex justify-between items-center">
+              <h2 class="text-sm font-bold text-amber-400">💰 Payroll Processing & Salary Reset</h2>
+              <button onclick="window.print()" class="bg-emerald-600 hover:bg-emerald-500 font-bold px-3 py-1.5 rounded text-xs no-print">🖨️ Print / Save Payroll</button>
+            </div>
+            <p class="text-xs text-slate-400 no-print">Kapag na-release na ang sahod, i-click ang "Pay & Reset to 0" para ibalik sa zero ang accumulated salary ng worker.</p>
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-xs">
+                <thead>
+                  <tr class="bg-slate-700 text-slate-300 border-b border-slate-600">
+                    <th class="p-2">Worker ID</th>
+                    <th class="p-2">Name</th>
+                    <th class="p-2">Days Worked</th>
+                    <th class="p-2">Total Salary</th>
+                    <th class="p-2">Advance</th>
+                    <th class="p-2 text-emerald-400">Net Salary</th>
+                    <th class="p-2 no-print">Action</th>
+                  </tr>
+                </thead>
+                <tbody id="payroll-table" class="divide-y divide-slate-700"></tbody>
+              </table>
+            </div>
+          </div>
         </section>
 
-        <!-- 7. CASH ADVANCE -->
         <section id="adm-advance" class="hidden space-y-4">
           <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
             <h2 class="text-sm font-bold text-amber-400">💵 Add Cash Advance</h2>
@@ -559,14 +657,25 @@ app.get('/admin', async (req, res) => {
           </div>
         </section>
 
-        <!-- 8. LEAVE REQUESTS -->
         <section id="adm-leave" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
-          <h2 class="text-sm font-bold text-amber-400">📝 Leave Requests</h2>
-          <p class="text-xs text-slate-400">Approve or reject leave applications from workers.</p>
-          <div class="p-3 bg-slate-700/50 rounded-lg text-xs text-slate-400 text-center">No pending leave requests.</div>
+          <h2 class="text-sm font-bold text-amber-400">📝 Leave Requests Management</h2>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs">
+              <thead>
+                <tr class="bg-slate-700 text-slate-300 border-b border-slate-600">
+                  <th class="p-2">Worker</th>
+                  <th class="p-2">Leave Type</th>
+                  <th class="p-2">Start Date</th>
+                  <th class="p-2">End Date</th>
+                  <th class="p-2">Reason</th>
+                  <th class="p-2">Status</th>
+                </tr>
+              </thead>
+              <tbody id="admin-leave-table" class="divide-y divide-slate-700"></tbody>
+            </table>
+          </div>
         </section>
 
-        <!-- 9. ANNOUNCEMENTS -->
         <section id="adm-announce" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">📢 Post Announcements</h2>
           <form onsubmit="postAnnouncement(event)" class="space-y-2">
@@ -576,35 +685,30 @@ app.get('/admin', async (req, res) => {
           </form>
         </section>
 
-        <!-- 10. SAFETY MANAGEMENT -->
         <section id="adm-safety" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">🦺 Safety Management</h2>
           <p class="text-xs text-slate-400">Safety compliance, incident reports, and PPE tracking.</p>
           <div class="p-3 bg-slate-700/50 rounded-lg text-xs text-emerald-400 font-bold">✓ 0 Safety Incidents reported this month.</div>
         </section>
 
-        <!-- 11. EQUIPMENT -->
         <section id="adm-equipment" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">📦 Equipment & Tools</h2>
           <p class="text-xs text-slate-400">Track heavy equipment and borrowed tools per site.</p>
           <div class="p-3 bg-slate-700/50 rounded-lg text-xs text-slate-300">Heavy machinery and construction equipment inventory.</div>
         </section>
 
-        <!-- 12. REPORTS -->
         <section id="adm-reports" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">📄 System Reports</h2>
           <p class="text-xs text-slate-400">Export attendance summary, payroll, and advance logs.</p>
           <button onclick="alert('Export feature ready.')" class="bg-slate-700 hover:bg-slate-600 border border-slate-600 px-3 py-2 rounded text-xs font-bold">📥 Export PDF / CSV Summary</button>
         </section>
 
-        <!-- 13. USER MANAGEMENT -->
         <section id="adm-users" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">👤 User Management</h2>
           <p class="text-xs text-slate-400">Manage admin roles and gate scanner credentials.</p>
           <div class="p-3 bg-slate-700/50 rounded-lg text-xs text-slate-300">Main Admin: <b>admin@abcbuilders.com</b></div>
         </section>
 
-        <!-- 14. SETTINGS -->
         <section id="adm-settings" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">⚙️ Company Settings</h2>
           <form onsubmit="saveSettings(event)" class="space-y-2">
@@ -640,6 +744,8 @@ app.get('/admin', async (req, res) => {
           if(tabName === 'workers') loadWorkers();
           if(tabName === 'qr') loadAttendance();
           if(tabName === 'advance') loadAdvances();
+          if(tabName === 'payroll') loadPayroll();
+          if(tabName === 'leave') loadAdminLeaves();
         }
 
         async function loadDashboardStats() {
@@ -700,12 +806,73 @@ app.get('/admin', async (req, res) => {
           } catch(err) {}
         }
 
+        async function loadPayroll() {
+          try {
+            const res = await fetch('/api/admin/payroll-list');
+            const data = await res.json();
+            const tbody = document.getElementById('payroll-table');
+            tbody.innerHTML = '';
+            if(data.length === 0) {
+              tbody.innerHTML = '<tr><td colspan="7" class="p-3 text-center text-slate-400">Walang record ng payroll.</td></tr>';
+              return;
+            }
+            data.forEach(p => {
+              tbody.innerHTML += \`
+                <tr>
+                  <td class="p-2 font-bold text-amber-300">\${p.worker_id}</td>
+                  <td class="p-2">\${p.full_name}</td>
+                  <td class="p-2">\${p.days_worked} days</td>
+                  <td class="p-2">₱\${p.total_salary.toLocaleString()}</td>
+                  <td class="p-2 text-red-400">₱\${p.advance.toLocaleString()}</td>
+                  <td class="p-2 text-emerald-400 font-bold">₱\${p.net_salary.toLocaleString()}</td>
+                  <td class="p-2 no-print">
+                    <button onclick="payAndReset('\${p.worker_id}', \${p.net_salary})" class="bg-blue-600 hover:bg-blue-500 text-white px-2 py-1 rounded text-[10px] font-bold">Pay & Reset to 0</button>
+                  </td>
+                </tr>
+              \`;
+            });
+          } catch(err) {}
+        }
+
+        async function payAndReset(workerId, netSalary) {
+          if(!confirm('Sigurado ka bang nabigyan na ng sahod si ' + workerId + ' at gusto mong i-reset ang balanse sa 0?')) return;
+          try {
+            const res = await fetch('/api/admin/pay-worker', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ worker_id: workerId, amount_paid: netSalary })
+            });
+            if(res.ok) {
+              alert('Sahod ay nai-rehistro na at ang balanse ay na-reset na sa 0.');
+              loadPayroll();
+            } else {
+              alert('May error sa pag-process.');
+            }
+          } catch(err) {
+            alert('Koneksyon error.');
+          }
+        }
+
         async function loadAdvances() {
           try {
             const res = await fetch('/api/advances'); const data = await res.json();
             const tbody = document.getElementById('advance-table'); tbody.innerHTML = '';
             data.forEach(adv => {
               tbody.innerHTML += '<tr><td class="p-2 font-semibold">' + adv.full_name + '</td><td class="p-2 text-purple-400 font-bold">₱' + adv.amount + '</td><td class="p-2 text-slate-300">' + (adv.reason || '—') + '</td><td class="p-2">' + adv.status + '</td><td class="p-2">' + adv.date + '</td></tr>';
+            });
+          } catch(err) {}
+        }
+
+        async function loadAdminLeaves() {
+          try {
+            const res = await fetch('/api/leave-requests'); const data = await res.json();
+            const tbody = document.getElementById('admin-leave-table'); tbody.innerHTML = '';
+            if(data.length === 0) {
+              tbody.innerHTML = '<tr><td colspan="6" class="p-3 text-center text-slate-400">Walang leave requests.</td></tr>';
+              return;
+            }
+            data.forEach(l => {
+              tbody.innerHTML += '<tr><td class="p-2 font-semibold">' + l.full_name + '</td><td class="p-2 text-amber-300">' + l.leave_type + '</td><td class="p-2">' + l.start_date + '</td><td class="p-2">' + l.end_date + '</td><td class="p-2 text-slate-300">' + (l.reason || '—') + '</td><td class="p-2 text-blue-400 font-bold">' + l.status + '</td></tr>';
             });
           } catch(err) {}
         }
@@ -753,7 +920,6 @@ app.get('/worker', async (req, res) => {
     <body class="bg-slate-900 text-white min-h-screen p-3 flex flex-col items-center justify-center">
       <div class="max-w-md w-full bg-slate-800 p-5 rounded-2xl shadow-xl space-y-4 border border-slate-700">
         
-        <!-- LOGIN SCREEN -->
         <div id="login-screen" class="space-y-3 text-center">
           ${company.logo_url ? `<img src="${company.logo_url}" class="w-12 h-12 rounded-full object-cover mx-auto border-2 border-purple-400">` : '👷'}
           <h1 class="text-base font-bold text-purple-400">${company.company_name}</h1>
@@ -765,7 +931,6 @@ app.get('/worker', async (req, res) => {
           <div id="login-error" class="text-red-400 text-xs font-bold hidden"></div>
         </div>
 
-        <!-- DASHBOARD CONTAINER -->
         <div id="worker-dashboard" class="hidden space-y-4">
           
           <div class="text-center pb-3 border-b border-slate-700 flex items-center justify-between">
@@ -781,7 +946,6 @@ app.get('/worker', async (req, res) => {
             </div>
           </div>
 
-          <!-- WORKER TABS -->
           <div id="tab-home" class="worker-tab space-y-3">
             <div class="bg-slate-700/50 p-4 rounded-xl border border-slate-600 text-center space-y-2">
               <div class="text-xs text-slate-400 font-semibold uppercase">Today's Attendance Status</div>
@@ -828,21 +992,66 @@ app.get('/worker', async (req, res) => {
             </div>
           </div>
 
+          <div id="tab-leave" class="worker-tab hidden space-y-3">
+            <div class="flex justify-between items-center">
+              <div class="text-xs font-bold text-purple-400 uppercase">Leave Requests</div>
+              <button onclick="openLeaveModal()" class="bg-purple-600 hover:bg-purple-500 px-2.5 py-1 rounded text-xs font-bold">+ Request Leave</button>
+            </div>
+            <div class="overflow-x-auto max-h-40">
+              <table class="w-full text-left text-[11px]">
+                <thead><tr class="bg-slate-700 text-slate-300 border-b border-slate-600"><th class="p-1.5">Type</th><th class="p-1.5">Dates</th><th class="p-1.5">Status</th></tr></thead>
+                <tbody id="w-leave-table" class="divide-y divide-slate-700"></tbody>
+              </table>
+            </div>
+          </div>
+
           <div id="tab-announce" class="worker-tab hidden space-y-2">
             <div class="text-xs font-bold text-purple-400 uppercase">Announcements</div>
             <div id="w-announcements-list" class="space-y-2 max-h-48 overflow-y-auto"></div>
           </div>
 
-          <!-- WORKER BOTTOM MENU -->
-          <div class="grid grid-cols-6 gap-1 pt-2 border-t border-slate-700 text-[10px]">
+          <div class="grid grid-cols-7 gap-1 pt-2 border-t border-slate-700 text-[9px]">
             <button onclick="switchWorkerTab('home')" class="worker-nav-btn bg-purple-600 text-white font-bold p-1.5 rounded text-center">🏠<br>Home</button>
             <button onclick="switchWorkerTab('qr')" class="worker-nav-btn bg-slate-700 text-slate-300 p-1.5 rounded text-center">📱<br>QR</button>
             <button onclick="switchWorkerTab('attendance')" class="worker-nav-btn bg-slate-700 text-slate-300 p-1.5 rounded text-center">📅<br>Logs</button>
             <button onclick="switchWorkerTab('advance')" class="worker-nav-btn bg-slate-700 text-slate-300 p-1.5 rounded text-center">💵<br>Advance</button>
             <button onclick="switchWorkerTab('salary')" class="worker-nav-btn bg-slate-700 text-slate-300 p-1.5 rounded text-center">💰<br>Salary</button>
+            <button onclick="switchWorkerTab('leave')" class="worker-nav-btn bg-slate-700 text-slate-300 p-1.5 rounded text-center">📝<br>Leave</button>
             <button onclick="logoutWorker()" class="bg-red-900/60 text-red-300 p-1.5 rounded text-center font-bold">🚪<br>Exit</button>
           </div>
 
+        </div>
+      </div>
+
+      <div id="leave-modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center p-3 z-50">
+        <div class="bg-slate-800 p-4 rounded-xl max-w-xs w-full border border-slate-700 space-y-3">
+          <h3 class="font-bold text-amber-400 text-sm">File Leave Request</h3>
+          <form onsubmit="submitLeave(event)" class="space-y-2 text-xs">
+            <div>
+              <label class="text-slate-400 text-[10px]">Leave Type</label>
+              <select id="leave-type" class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white">
+                <option value="Vacation Leave">Vacation Leave</option>
+                <option value="Sick Leave">Sick Leave</option>
+                <option value="Emergency Leave">Emergency Leave</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-slate-400 text-[10px]">Start Date</label>
+              <input type="date" id="leave-start" required class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white">
+            </div>
+            <div>
+              <label class="text-slate-400 text-[10px]">End Date</label>
+              <input type="date" id="leave-end" required class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white">
+            </div>
+            <div>
+              <label class="text-slate-400 text-[10px]">Reason</label>
+              <textarea id="leave-reason" placeholder="Dahilan ng leave..." class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white"></textarea>
+            </div>
+            <div class="flex gap-2 pt-1">
+              <button type="button" onclick="closeLeaveModal()" class="bg-slate-600 hover:bg-slate-500 p-2 rounded w-full font-bold">Cancel</button>
+              <button type="submit" class="bg-purple-600 hover:bg-purple-500 p-2 rounded w-full font-bold">Submit</button>
+            </div>
+          </form>
         </div>
       </div>
 
@@ -859,6 +1068,37 @@ app.get('/worker', async (req, res) => {
           });
           event.currentTarget.classList.remove('bg-slate-700', 'text-slate-300');
           event.currentTarget.classList.add('bg-purple-600', 'text-white');
+        }
+
+        function openLeaveModal() { document.getElementById('leave-modal').classList.remove('hidden'); }
+        function closeLeaveModal() { document.getElementById('leave-modal').classList.add('hidden'); }
+
+        async function submitLeave(e) {
+          e.preventDefault();
+          if(!globalWorkerData) return;
+          const body = {
+            worker_id: globalWorkerData.worker.worker_id,
+            leave_type: document.getElementById('leave-type').value,
+            start_date: document.getElementById('leave-start').value,
+            end_date: document.getElementById('leave-end').value,
+            reason: document.getElementById('leave-reason').value
+          };
+          try {
+            const res = await fetch('/api/leave-requests', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify(body)
+            });
+            if(res.ok) {
+              alert('Leave request successfully submitted!');
+              closeLeaveModal();
+              checkWorker(); // Refresh data
+            } else {
+              alert('Error submitting leave.');
+            }
+          } catch(err) {
+            alert('Network error.');
+          }
         }
 
         async function checkWorker() {
@@ -910,6 +1150,16 @@ app.get('/worker', async (req, res) => {
               } else {
                 data.advances.forEach(adv => {
                   advTbody.innerHTML += '<tr><td class="p-1.5">' + adv.date + '</td><td class="p-1.5 text-purple-400 font-bold">₱' + adv.amount + '</td><td class="p-1.5 text-slate-300">' + (adv.reason || '—') + '</td><td class="p-1.5">' + adv.status + '</td></tr>';
+                });
+              }
+
+              const leaveTbody = document.getElementById('w-leave-table');
+              leaveTbody.innerHTML = '';
+              if(data.leave_requests.length === 0) {
+                leaveTbody.innerHTML = '<tr><td colspan="3" class="p-2 text-center text-slate-400">Walang leave requests.</td></tr>';
+              } else {
+                data.leave_requests.forEach(l => {
+                  leaveTbody.innerHTML += '<tr><td class="p-1.5 text-amber-300">' + l.leave_type + '</td><td class="p-1.5">' + l.start_date + ' to ' + l.end_date + '</td><td class="p-1.5 text-blue-400 font-bold">' + l.status + '</td></tr>';
                 });
               }
 
