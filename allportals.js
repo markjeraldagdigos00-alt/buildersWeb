@@ -63,6 +63,9 @@ async function ensureTables() {
       );
     `);
 
+    // Auto-add column kung sakaling lumang table ang nandoon sa database
+    await pool.query(`ALTER TABLE workers ADD COLUMN IF NOT EXISTS profile_pic TEXT DEFAULT '';`);
+
     const compCheck = await pool.query('SELECT count(*) FROM company_settings');
     if (parseInt(compCheck.rows[0].count) === 0) {
       await pool.query(`INSERT INTO company_settings (company_name, address, contact_number) VALUES ('ABC Builders', 'Angeles City', '09123456789')`);
@@ -73,7 +76,8 @@ async function ensureTables() {
       await pool.query(`
         INSERT INTO workers (worker_id, full_name, contact_number, position, daily_rate, assigned_project, qr_code) VALUES
         ('W-001', 'Juan Dela Cruz', '09123456789', 'Mason', 700.00, 'Building A', 'W-001'),
-        ('W-002', 'Pedro Santos', '09987654321', 'Carpenter', 650.00, 'Building B', 'W-002');
+        ('W-002', 'Pedro Santos', '09987654321', 'Carpenter', 650.00, 'Building B', 'W-002')
+        ON CONFLICT (worker_id) DO NOTHING;
       `);
     }
   } catch (err) {
@@ -83,8 +87,12 @@ async function ensureTables() {
 ensureTables();
 
 async function getCompanyInfo() {
-  const res = await pool.query('SELECT * FROM company_settings LIMIT 1');
-  return res.rows[0] || { company_name: 'ABC Builders', logo_url: '', address: 'Angeles City', contact_number: '09123456789' };
+  try {
+    const res = await pool.query('SELECT * FROM company_settings LIMIT 1');
+    return res.rows[0] || { company_name: 'ABC Builders', logo_url: '', address: 'Angeles City', contact_number: '09123456789' };
+  } catch (e) {
+    return { company_name: 'ABC Builders', logo_url: '', address: 'Angeles City', contact_number: '09123456789' };
+  }
 }
 
 // ================= API ENDPOINTS =================
@@ -109,11 +117,16 @@ app.post('/api/workers', async (req, res) => {
   const { worker_id, full_name, contact_number, position, daily_rate, assigned_project, profile_pic } = req.body;
   try {
     await pool.query(
-      `INSERT INTO workers (worker_id, full_name, contact_number, position, daily_rate, assigned_project, qr_code, profile_pic) VALUES ($1, $2, $3, $4, $5, $6, $1, $7) ON CONFLICT (worker_id) DO NOTHING`,
+      `INSERT INTO workers (worker_id, full_name, contact_number, position, daily_rate, assigned_project, qr_code, profile_pic) 
+       VALUES ($1, $2, $3, $4, $5, $6, $1, $7) 
+       ON CONFLICT (worker_id) DO UPDATE SET 
+       full_name = EXCLUDED.full_name, contact_number = EXCLUDED.contact_number, position = EXCLUDED.position, daily_rate = EXCLUDED.daily_rate, assigned_project = EXCLUDED.assigned_project`,
       [worker_id, full_name, contact_number, position, daily_rate, assigned_project, profile_pic || '']
     );
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { 
+    res.status(500).json({ error: err.message }); 
+  }
 });
 
 app.get('/api/scanner/dashboard', async (req, res) => {
@@ -321,11 +334,13 @@ app.get('/', async (req, res) => {
           if(tab !== 'scan' && html5QrCode) html5QrCode.stop().catch(e => {});
         }
         async function loadDashboard() {
-          const res = await fetch('/api/scanner/dashboard'); const data = await res.json();
-          document.getElementById('d-date').innerText = data.date;
-          document.getElementById('d-present').innerText = data.total_present;
-          document.getElementById('d-timein').innerText = data.total_time_in;
-          document.getElementById('d-timeout').innerText = data.total_time_out;
+          try {
+            const res = await fetch('/api/scanner/dashboard'); const data = await res.json();
+            document.getElementById('d-date').innerText = data.date;
+            document.getElementById('d-present').innerText = data.total_present;
+            document.getElementById('d-timein').innerText = data.total_time_in;
+            document.getElementById('d-timeout').innerText = data.total_time_out;
+          } catch(e) {}
         }
         function startCamera() {
           if (!html5QrCode) html5QrCode = new Html5Qrcode("reader");
@@ -335,24 +350,31 @@ app.get('/', async (req, res) => {
           if (!code) return;
           const box = document.getElementById('scan-result');
           box.classList.remove('hidden', 'bg-emerald-900', 'bg-red-900', 'text-emerald-200', 'text-red-200');
-          const res = await fetch('/api/scanner/scan', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({qr_code: code.trim()}) });
-          const data = await res.json();
-          if(res.ok) {
-            box.classList.add('bg-emerald-900', 'text-emerald-200');
-            box.innerHTML = '<div class="text-emerald-400 font-extrabold text-sm">✓ ' + data.status_type + ' RECORDED</div><div>Name: ' + data.name + '</div><div>Position: ' + data.position + '</div><div>Time: ' + data.time + '</div>';
-          } else {
+          try {
+            const res = await fetch('/api/scanner/scan', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({qr_code: code.trim()}) });
+            const data = await res.json();
+            if(res.ok) {
+              box.classList.add('bg-emerald-900', 'text-emerald-200');
+              box.innerHTML = '<div class="text-emerald-400 font-extrabold text-sm">✓ ' + data.status_type + ' RECORDED</div><div>Name: ' + data.name + '</div><div>Position: ' + data.position + '</div><div>Time: ' + data.time + '</div>';
+            } else {
+              box.classList.add('bg-red-900', 'text-red-200');
+              box.innerHTML = '<div class="text-red-400 font-bold">X ERROR</div><div>' + data.error + '</div>';
+            }
+          } catch(e) {
             box.classList.add('bg-red-900', 'text-red-200');
-            box.innerHTML = '<div class="text-red-400 font-bold">X ERROR</div><div>' + data.error + '</div>';
+            box.innerHTML = '<div class="text-red-400 font-bold">X ERROR</div><div>Connection problem.</div>';
           }
           document.getElementById('manual-qr').value = '';
         }
         async function loadToday() {
-          const res = await fetch('/api/scanner/today'); const data = await res.json();
-          const tbody = document.getElementById('today-table-body'); tbody.innerHTML = '';
-          if(data.length === 0) { tbody.innerHTML = '<tr><td colspan="4" class="p-3 text-center text-slate-400">Wala pang pumasok.</td></tr>'; return; }
-          data.forEach(i => {
-            tbody.innerHTML += '<tr><td class="p-2 font-semibold">' + i.full_name + '</td><td class="p-2 text-slate-300">' + i.position + '</td><td class="p-2 text-blue-400 font-bold">' + (i.time_in?new Date(i.time_in).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'-') + '</td><td class="p-2 text-purple-400 font-bold">' + (i.time_out?new Date(i.time_out).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'—') + '</td></tr>';
-          });
+          try {
+            const res = await fetch('/api/scanner/today'); const data = await res.json();
+            const tbody = document.getElementById('today-table-body'); tbody.innerHTML = '';
+            if(data.length === 0) { tbody.innerHTML = '<tr><td colspan="4" class="p-3 text-center text-slate-400">Wala pang pumasok.</td></tr>'; return; }
+            data.forEach(i => {
+              tbody.innerHTML += '<tr><td class="p-2 font-semibold">' + i.full_name + '</td><td class="p-2 text-slate-300">' + i.position + '</td><td class="p-2 text-blue-400 font-bold">' + (i.time_in?new Date(i.time_in).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'-') + '</td><td class="p-2 text-purple-400 font-bold">' + (i.time_out?new Date(i.time_out).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'—') + '</td></tr>';
+            });
+          } catch(e) {}
         }
         loadDashboard();
       </script>
@@ -492,7 +514,7 @@ app.get('/admin', async (req, res) => {
             document.getElementById('stat-present').innerText = d.present_today;
             document.getElementById('stat-absent').innerText = d.absent_today;
             document.getElementById('stat-advance').innerText = '₱' + d.total_advance.toLocaleString();
-          } catch(err) { console.error(err); }
+          } catch(err) {}
         }
         async function loadWorkers() {
           try {
@@ -503,7 +525,7 @@ app.get('/admin', async (req, res) => {
               tbody.innerHTML += '<tr><td class="p-2 font-bold text-amber-300">' + w.worker_id + '</td><td class="p-2">' + w.full_name + '</td><td class="p-2">' + w.position + '</td><td class="p-2">' + (w.assigned_project || '—') + '</td><td class="p-2 text-emerald-400">₱' + w.daily_rate + '</td><td class="p-2 font-mono text-[11px]">' + w.qr_code + '</td></tr>';
               select.innerHTML += '<option value="' + w.worker_id + '">' + w.full_name + ' (' + w.worker_id + ')</option>';
             });
-          } catch(err) { console.error(err); }
+          } catch(err) {}
         }
         async function addWorker(e) {
           e.preventDefault();
@@ -532,7 +554,7 @@ app.get('/admin', async (req, res) => {
               document.getElementById('worker-form').reset();
               loadWorkers();
             } else {
-              alert('Error: ' + (result.error || 'Hindi ma-save ang worker. Baka pareho ang Worker ID.'));
+              alert('Error: ' + (result.error || 'Hindi ma-save ang worker.'));
             }
           } catch(err) {
             alert('Network error. Subukan ulit.');
@@ -548,7 +570,7 @@ app.get('/admin', async (req, res) => {
             data.forEach(a => {
               tbody.innerHTML += '<tr><td class="p-2 font-semibold">' + a.full_name + '</td><td class="p-2">' + a.date + '</td><td class="p-2 text-blue-400">' + (a.time_in ? new Date(a.time_in).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '-') + '</td><td class="p-2 text-purple-400">' + (a.time_out ? new Date(a.time_out).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—') + '</td><td class="p-2 text-emerald-400">' + a.status + '</td></tr>';
             });
-          } catch(err) { console.error(err); }
+          } catch(err) {}
         }
         async function loadAdvances() {
           try {
@@ -557,7 +579,7 @@ app.get('/admin', async (req, res) => {
             data.forEach(adv => {
               tbody.innerHTML += '<tr><td class="p-2 font-semibold">' + adv.full_name + '</td><td class="p-2 text-purple-400 font-bold">₱' + adv.amount + '</td><td class="p-2 text-slate-300">' + (adv.reason || '—') + '</td><td class="p-2">' + adv.status + '</td><td class="p-2">' + adv.date + '</td></tr>';
             });
-          } catch(err) { console.error(err); }
+          } catch(err) {}
         }
         async function addAdvance(e) {
           e.preventDefault();
@@ -637,7 +659,7 @@ app.get('/worker', async (req, res) => {
             } else {
               box.innerHTML = '<div class="text-red-400 font-bold text-center">' + data.error + '</div>';
             }
-          } catch(err) { console.error(err); }
+          } catch(err) {}
         }
       </script>
     </body>
