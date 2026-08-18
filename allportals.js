@@ -12,7 +12,6 @@ const pool = new Pool({
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
-// Awtomatikong paglikha ng Tables at Default Data
 async function ensureTables() {
   try {
     await pool.query(`
@@ -64,13 +63,11 @@ async function ensureTables() {
       );
     `);
 
-    // Default company settings kung wala pa
     const compCheck = await pool.query('SELECT count(*) FROM company_settings');
     if (parseInt(compCheck.rows[0].count) === 0) {
       await pool.query(`INSERT INTO company_settings (company_name, address, contact_number) VALUES ('ABC Builders', 'Angeles City', '09123456789')`);
     }
 
-    // Default workers kung wala pa
     const check = await pool.query('SELECT count(*) FROM workers');
     if (parseInt(check.rows[0].count) === 0) {
       await pool.query(`
@@ -85,15 +82,12 @@ async function ensureTables() {
 }
 ensureTables();
 
-// Helper para makuha ang company details
 async function getCompanyInfo() {
   const res = await pool.query('SELECT * FROM company_settings LIMIT 1');
   return res.rows[0] || { company_name: 'ABC Builders', logo_url: '', address: 'Angeles City', contact_number: '09123456789' };
 }
 
 // ================= API ENDPOINTS =================
-
-// Company Settings API
 app.get('/api/settings', async (req, res) => {
   await ensureTables();
   res.json(await getCompanyInfo());
@@ -105,7 +99,6 @@ app.post('/api/settings', async (req, res) => {
   res.json({ success: true });
 });
 
-// Workers API
 app.get('/api/workers', async (req, res) => {
   await ensureTables();
   const result = await pool.query('SELECT * FROM workers ORDER BY id DESC');
@@ -123,7 +116,6 @@ app.post('/api/workers', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Scanner APIs
 app.get('/api/scanner/dashboard', async (req, res) => {
   const today = new Date().toISOString().split('T')[0];
   const company = await getCompanyInfo();
@@ -173,7 +165,6 @@ app.get('/api/scanner/today', async (req, res) => {
   res.json(result.rows);
 });
 
-// Admin Dashboard Stats & Details
 app.get('/api/admin/dashboard', async (req, res) => {
   const today = new Date().toISOString().split('T')[0];
   const workersCount = await pool.query('SELECT COUNT(*) FROM workers');
@@ -200,7 +191,6 @@ app.get('/api/admin/attendance', async (req, res) => {
   res.json(result.rows);
 });
 
-// Advance Money APIs
 app.get('/api/advances', async (req, res) => {
   const result = await pool.query(`
     SELECT adv.*, w.full_name FROM advances adv 
@@ -216,7 +206,6 @@ app.post('/api/advances', async (req, res) => {
   res.json({ success: true });
 });
 
-// Announcements APIs
 app.get('/api/announcements', async (req, res) => {
   const result = await pool.query('SELECT * FROM announcements ORDER BY id DESC');
   res.json(result.rows);
@@ -228,7 +217,6 @@ app.post('/api/announcements', async (req, res) => {
   res.json({ success: true });
 });
 
-// Worker Portal API
 app.get('/api/worker/:id', async (req, res) => {
   const workerId = req.params.id;
   const company = await getCompanyInfo();
@@ -242,7 +230,6 @@ app.get('/api/worker/:id', async (req, res) => {
   const advances = await pool.query('SELECT SUM(amount) as total FROM advances WHERE worker_id = $1 AND status = $2', [workerId, 'Unpaid']);
   const annRes = await pool.query('SELECT * FROM announcements ORDER BY id DESC LIMIT 5');
 
-  // Salary computation calculation
   const daysWorkedRes = await pool.query('SELECT COUNT(*) FROM attendance WHERE worker_id = $1 AND time_in IS NOT NULL', [workerId]);
   const daysWorked = parseInt(daysWorkedRes.rows[0].count) || 0;
   const dailyRate = parseFloat(worker.daily_rate);
@@ -261,9 +248,7 @@ app.get('/api/worker/:id', async (req, res) => {
 });
 
 
-// ================= FRONTEND PORTALS UI =================
-
-// 1. SCANNER PORTAL ( / )
+// ================= 1. SCANNER PORTAL ( / ) =================
 app.get('/', async (req, res) => {
   const company = await getCompanyInfo();
   res.send(`
@@ -276,53 +261,48 @@ app.get('/', async (req, res) => {
       <script src="https://unpkg.com/html5-qrcode"></script>
     </head>
     <body class="bg-slate-900 text-white min-h-screen flex flex-col">
-      <nav class="bg-slate-800 border-b border-slate-700 p-4 flex justify-between items-center max-w-4xl mx-auto w-full rounded-b-xl shadow-lg">
-        <div class="flex items-center gap-3">
-          ${company.logo_url ? `<img src="${company.logo_url}" class="w-8 h-8 rounded-full object-cover border border-amber-400">` : '🏗️'}
+      <nav class="bg-slate-800 border-b border-slate-700 p-3 flex justify-between items-center max-w-lg mx-auto w-full rounded-b-xl shadow-lg">
+        <div class="flex items-center gap-2">
+          ${company.logo_url ? `<img src="${company.logo_url}" class="w-7 h-7 rounded-full object-cover border border-amber-400">` : '🏗️'}
           <div>
-            <h1 class="text-sm md:text-base font-bold text-amber-400">${company.company_name}</h1>
-            <p class="text-[10px] text-slate-400">Scanner Portal</p>
+            <h1 class="text-xs sm:text-sm font-bold text-amber-400">${company.company_name}</h1>
+            <p class="text-[9px] text-slate-400">Gate Scanner Only</p>
           </div>
         </div>
         <div class="space-x-1 text-xs">
-          <button onclick="switchTab('dashboard')" class="bg-slate-700 px-3 py-1.5 rounded-lg font-semibold">Dashboard</button>
+          <button onclick="switchTab('dashboard')" class="bg-slate-700 px-3 py-1.5 rounded-lg font-semibold">Dash</button>
           <button onclick="switchTab('scan')" class="bg-amber-500 text-slate-900 font-bold px-3 py-1.5 rounded-lg">Scan QR</button>
           <button onclick="switchTab('today')" class="bg-slate-700 px-3 py-1.5 rounded-lg font-semibold">Today</button>
-          <a href="/admin" class="bg-blue-600 text-white px-2 py-1.5 rounded-lg font-semibold">Admin</a>
-          <a href="/worker" class="bg-purple-600 text-white px-2 py-1.5 rounded-lg font-semibold">Worker</a>
         </div>
       </nav>
-      <main class="flex-1 max-w-2xl w-full mx-auto p-4 mt-4">
-        <!-- TAB 1: DASHBOARD -->
+      <main class="flex-1 max-w-lg w-full mx-auto p-3 mt-2">
         <section id="tab-dashboard" class="space-y-4">
-          <div class="bg-slate-800 p-6 rounded-2xl text-center border border-slate-700 shadow-xl">
-            <h2 class="text-xl font-bold text-amber-400">${company.company_name}</h2>
+          <div class="bg-slate-800 p-5 rounded-2xl text-center border border-slate-700 shadow-xl">
+            <h2 class="text-lg font-bold text-amber-400">${company.company_name}</h2>
             <p class="text-xs text-slate-400 uppercase font-bold mt-1">Date Today: <span id="d-date" class="text-white">-</span></p>
           </div>
-          <div class="grid grid-cols-3 gap-3 text-center">
-            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700"><p class="text-xs text-slate-400">Total Present</p><h3 id="d-present" class="text-2xl font-bold text-emerald-400 mt-1">0</h3></div>
-            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700"><p class="text-xs text-slate-400">Time In</p><h3 id="d-timein" class="text-2xl font-bold text-blue-400 mt-1">0</h3></div>
-            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700"><p class="text-xs text-slate-400">Time Out</p><h3 id="d-timeout" class="text-2xl font-bold text-purple-400 mt-1">0</h3></div>
+          <div class="grid grid-cols-3 gap-2 text-center">
+            <div class="bg-slate-800 p-3 rounded-xl border border-slate-700"><p class="text-[10px] text-slate-400">Present</p><h3 id="d-present" class="text-xl font-bold text-emerald-400 mt-1">0</h3></div>
+            <div class="bg-slate-800 p-3 rounded-xl border border-slate-700"><p class="text-[10px] text-slate-400">Time In</p><h3 id="d-timein" class="text-xl font-bold text-blue-400 mt-1">0</h3></div>
+            <div class="bg-slate-800 p-3 rounded-xl border border-slate-700"><p class="text-[10px] text-slate-400">Time Out</p><h3 id="d-timeout" class="text-xl font-bold text-purple-400 mt-1">0</h3></div>
           </div>
         </section>
 
-        <!-- TAB 2: SCAN QR -->
-        <section id="tab-scan" class="hidden bg-slate-800 p-6 rounded-2xl text-center space-y-4 border border-slate-700 shadow-xl">
-          <h2 class="text-xl font-bold text-amber-400">SCAN WORKER QR CODE</h2>
-          <div id="reader" class="overflow-hidden rounded-xl bg-black border-2 border-amber-500 mx-auto max-w-sm"></div>
-          <div class="flex gap-2 max-w-sm mx-auto">
-            <input type="text" id="manual-qr" placeholder="Or type ID (e.g. W-001)" class="bg-slate-700 border border-slate-600 p-2 rounded-lg w-full text-center text-white font-bold uppercase text-sm">
-            <button onclick="processScan(document.getElementById('manual-qr').value)" class="bg-amber-500 text-slate-900 font-bold px-4 rounded-lg text-sm">SUBMIT</button>
+        <section id="tab-scan" class="hidden bg-slate-800 p-4 rounded-2xl text-center space-y-3 border border-slate-700 shadow-xl">
+          <h2 class="text-base font-bold text-amber-400">SCAN WORKER QR CODE</h2>
+          <div id="reader" class="overflow-hidden rounded-xl bg-black border-2 border-amber-500 mx-auto w-full max-w-xs"></div>
+          <div class="flex gap-2 max-w-xs mx-auto">
+            <input type="text" id="manual-qr" placeholder="O i-type ID (e.g. W-001)" class="bg-slate-700 border border-slate-600 p-2 rounded-lg w-full text-center text-white font-bold uppercase text-xs">
+            <button onclick="processScan(document.getElementById('manual-qr').value)" class="bg-amber-500 text-slate-900 font-bold px-3 rounded-lg text-xs">OK</button>
           </div>
-          <div id="scan-result" class="hidden p-4 rounded-xl font-bold text-left space-y-1"></div>
+          <div id="scan-result" class="hidden p-3 rounded-xl font-bold text-left space-y-1 text-xs"></div>
         </section>
 
-        <!-- TAB 3: TODAY ATTENDANCE -->
-        <section id="tab-today" class="hidden bg-slate-800 p-6 rounded-2xl space-y-4 border border-slate-700 shadow-xl">
-          <h2 class="text-xl font-bold text-amber-400">Today's Attendance</h2>
-          <div class="overflow-x-auto max-h-[60vh]">
-            <table class="w-full text-left text-sm">
-              <thead><tr class="bg-slate-700 text-slate-300 border-b border-slate-600"><th class="p-2">Worker</th><th class="p-2">Position</th><th class="p-2">Time In</th><th class="p-2">Time Out</th></tr></thead>
+        <section id="tab-today" class="hidden bg-slate-800 p-4 rounded-2xl space-y-3 border border-slate-700 shadow-xl">
+          <h2 class="text-base font-bold text-amber-400">Today's Attendance</h2>
+          <div class="overflow-x-auto max-h-[55vh]">
+            <table class="w-full text-left text-xs">
+              <thead><tr class="bg-slate-700 text-slate-300 border-b border-slate-600"><th class="p-2">Worker</th><th class="p-2">Pos</th><th class="p-2">In</th><th class="p-2">Out</th></tr></thead>
               <tbody id="today-table-body" class="divide-y divide-slate-700"></tbody>
             </table>
           </div>
@@ -338,7 +318,7 @@ app.get('/', async (req, res) => {
           if(tab === 'dashboard') loadDashboard();
           if(tab === 'scan') startCamera();
           if(tab === 'today') loadToday();
-          if(tab !== 'scan' && html5QrCode) html5QrCode.stop().catch(e=>{});
+          if(tab !== 'scan' && html5QrCode) html5QrCode.stop().catch(e => {});
         }
         async function loadDashboard() {
           const res = await fetch('/api/scanner/dashboard'); const data = await res.json();
@@ -349,7 +329,7 @@ app.get('/', async (req, res) => {
         }
         function startCamera() {
           if (!html5QrCode) html5QrCode = new Html5Qrcode("reader");
-          html5QrCode.start({ facingMode: "environment" }, { fps: 10, qrbox: 220 }, text => processScan(text), err => {});
+          html5QrCode.start({ facingMode: "environment" }, { fps: 15, qrbox: { width: 200, height: 200 } }, text => processScan(text), err => {}).catch(err => {});
         }
         async function processScan(code) {
           if (!code) return;
@@ -359,7 +339,7 @@ app.get('/', async (req, res) => {
           const data = await res.json();
           if(res.ok) {
             box.classList.add('bg-emerald-900', 'text-emerald-200');
-            box.innerHTML = \`<div class="text-emerald-400 font-extrabold text-base">✓ ATTENDANCE RECORDED</div><div>Name: \${data.name}</div><div>Position: \${data.position}</div><div>Time: \${data.time}</div><div class="mt-2 text-amber-300 font-black">STATUS: \${data.status_type}</div>\`;
+            box.innerHTML = \`<div class="text-emerald-400 font-extrabold text-sm">✓ \${data.status_type} RECORDED</div><div>Name: \${data.name}</div><div>Position: \${data.position}</div><div>Time: \${data.time}</div>\`;
           } else {
             box.classList.add('bg-red-900', 'text-red-200');
             box.innerHTML = \`<div class="text-red-400 font-bold">X ERROR</div><div>\${data.error}</div>\`;
@@ -369,7 +349,7 @@ app.get('/', async (req, res) => {
         async function loadToday() {
           const res = await fetch('/api/scanner/today'); const data = await res.json();
           const tbody = document.getElementById('today-table-body'); tbody.innerHTML = '';
-          if(data.length === 0) { tbody.innerHTML = \`<tr><td colspan="4" class="p-3 text-center text-slate-400">Wala pang pumasok ngayong araw.</td></tr>\`; return; }
+          if(data.length === 0) { tbody.innerHTML = \`<tr><td colspan="4" class="p-3 text-center text-slate-400">Wala pang pumasok.</td></tr>\`; return; }
           data.forEach(i => {
             tbody.innerHTML += \`<tr><td class="p-2 font-semibold">\${i.full_name}</td><td class="p-2 text-slate-300">\${i.position}</td><td class="p-2 text-blue-400 font-bold">\${i.time_in?new Date(i.time_in).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'-'}</td><td class="p-2 text-purple-400 font-bold">\${i.time_out?new Date(i.time_out).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'—'}</td></tr>\`;
           });
@@ -381,7 +361,7 @@ app.get('/', async (req, res) => {
   `);
 });
 
-// 2. ADMIN PORTAL ( /admin )
+// ================= 2. ADMIN PORTAL ( /admin ) =================
 app.get('/admin', async (req, res) => {
   const company = await getCompanyInfo();
   res.send(`
@@ -392,114 +372,105 @@ app.get('/admin', async (req, res) => {
       <title>${company.company_name} - Admin Dashboard</title>
       <script src="https://cdn.tailwindcss.com"></script>
     </head>
-    <body class="bg-slate-900 text-white min-h-screen p-4 flex flex-col">
-      <div class="max-w-5xl mx-auto w-full space-y-4">
-        <!-- Top Nav -->
-        <div class="bg-slate-800 p-4 rounded-xl flex justify-between items-center shadow-lg border border-slate-700">
-          <div class="flex items-center gap-3">
-            ${company.logo_url ? `<img src="${company.logo_url}" class="w-9 h-9 rounded-full object-cover border border-blue-400">` : '🛠️'}
+    <body class="bg-slate-900 text-white min-h-screen p-3 flex flex-col">
+      <div class="max-w-5xl mx-auto w-full space-y-3">
+        <div class="bg-slate-800 p-3 rounded-xl flex justify-between items-center shadow-lg border border-slate-700">
+          <div class="flex items-center gap-2">
+            ${company.logo_url ? `<img src="${company.logo_url}" class="w-8 h-8 rounded-full object-cover border border-blue-400">` : '🛠️'}
             <div>
-              <h1 class="text-base font-bold text-blue-400">${company.company_name} - Admin</h1>
-              <p class="text-[10px] text-slate-400">${company.address}</p>
+              <h1 class="text-xs sm:text-sm font-bold text-blue-400">${company.company_name} - Admin Portal</h1>
+              <p class="text-[9px] text-slate-400">Manager Access Only</p>
             </div>
           </div>
-          <div class="space-x-1 text-xs">
-            <button onclick="switchAdminTab('dash')" class="bg-blue-600 px-3 py-1.5 rounded-lg font-bold">Dashboard</button>
-            <button onclick="switchAdminTab('workers')" class="bg-slate-700 px-3 py-1.5 rounded-lg">Workers</button>
-            <button onclick="switchAdminTab('attendance')" class="bg-slate-700 px-3 py-1.5 rounded-lg">Attendance</button>
-            <button onclick="switchAdminTab('advance')" class="bg-slate-700 px-3 py-1.5 rounded-lg">Advance</button>
-            <button onclick="switchAdminTab('announce')" class="bg-slate-700 px-3 py-1.5 rounded-lg">Announcements</button>
-            <button onclick="switchAdminTab('settings')" class="bg-slate-700 px-3 py-1.5 rounded-lg">Settings</button>
-            <a href="/" class="bg-slate-700 px-2 py-1.5 rounded-lg text-amber-400">Scanner</a>
+          <div class="space-x-1 text-[11px]">
+            <button onclick="switchAdminTab('dash')" class="bg-blue-600 px-2.5 py-1 rounded font-bold">Dash</button>
+            <button onclick="switchAdminTab('workers')" class="bg-slate-700 px-2.5 py-1 rounded">Workers</button>
+            <button onclick="switchAdminTab('attendance')" class="bg-slate-700 px-2.5 py-1 rounded">Logs</button>
+            <button onclick="switchAdminTab('advance')" class="bg-slate-700 px-2.5 py-1 rounded">Advance</button>
+            <button onclick="switchAdminTab('announce')" class="bg-slate-700 px-2.5 py-1 rounded">Notice</button>
+            <button onclick="switchAdminTab('settings')" class="bg-slate-700 px-2.5 py-1 rounded">Config</button>
           </div>
         </div>
 
-        <!-- TAB 1: DASHBOARD -->
-        <section id="adm-dash" class="space-y-4">
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
-            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700"><p class="text-xs text-slate-400">Total Workers</p><h3 id="stat-total" class="text-2xl font-bold text-amber-400 mt-1">0</h3></div>
-            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700"><p class="text-xs text-slate-400">Present Today</p><h3 id="stat-present" class="text-2xl font-bold text-emerald-400 mt-1">0</h3></div>
-            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700"><p class="text-xs text-slate-400">Absent Today</p><h3 id="stat-absent" class="text-2xl font-bold text-red-400 mt-1">0</h3></div>
-            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700"><p class="text-xs text-slate-400">Total Advance Money</p><h3 id="stat-advance" class="text-2xl font-bold text-purple-400 mt-1">₱0</h3></div>
+        <section id="adm-dash" class="space-y-3">
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-center">
+            <div class="bg-slate-800 p-3 rounded-xl border border-slate-700"><p class="text-[10px] text-slate-400">Total Workers</p><h3 id="stat-total" class="text-xl font-bold text-amber-400 mt-1">0</h3></div>
+            <div class="bg-slate-800 p-3 rounded-xl border border-slate-700"><p class="text-[10px] text-slate-400">Present Today</p><h3 id="stat-present" class="text-xl font-bold text-emerald-400 mt-1">0</h3></div>
+            <div class="bg-slate-800 p-3 rounded-xl border border-slate-700"><p class="text-[10px] text-slate-400">Absent Today</p><h3 id="stat-absent" class="text-xl font-bold text-red-400 mt-1">0</h3></div>
+            <div class="bg-slate-800 p-3 rounded-xl border border-slate-700"><p class="text-[10px] text-slate-400">Total Advance</p><h3 id="stat-advance" class="text-xl font-bold text-purple-400 mt-1">₱0</h3></div>
           </div>
         </section>
 
-        <!-- TAB 2: WORKERS -->
-        <section id="adm-workers" class="hidden space-y-4">
-          <div class="bg-slate-800 p-6 rounded-xl space-y-4 border border-slate-700">
-            <h2 class="text-base font-bold text-amber-400">Register New Worker</h2>
-            <form onsubmit="addWorker(event)" class="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <input type="text" id="wid" placeholder="Worker ID (e.g. W-003)" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-sm">
-              <input type="text" id="wname" placeholder="Full Name" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-sm">
-              <input type="text" id="wpos" placeholder="Position (e.g. Mason)" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-sm">
-              <input type="text" id="wcontact" placeholder="Contact Number" class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-sm">
-              <input type="number" id="wrate" placeholder="Daily Rate (₱)" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-sm">
-              <input type="text" id="wproject" placeholder="Assigned Project" class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-sm">
-              <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 font-bold p-2 rounded col-span-full text-sm">Save & Generate QR Code</button>
+        <section id="adm-workers" class="hidden space-y-3">
+          <div class="bg-slate-800 p-4 rounded-xl space-y-3 border border-slate-700">
+            <h2 class="text-sm font-bold text-amber-400">Register New Worker</h2>
+            <form onsubmit="addWorker(event)" class="grid grid-cols-1 md:grid-cols-3 gap-2">
+              <input type="text" id="wid" placeholder="Worker ID (e.g. W-003)" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-xs">
+              <input type="text" id="wname" placeholder="Full Name" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-xs">
+              <input type="text" id="wpos" placeholder="Position (e.g. Mason)" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-xs">
+              <input type="text" id="wcontact" placeholder="Contact Number" class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-xs">
+              <input type="number" id="wrate" placeholder="Daily Rate (₱)" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-xs">
+              <input type="text" id="wproject" placeholder="Assigned Project" class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-xs">
+              <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 font-bold p-2 rounded col-span-full text-xs">Save Worker & QR</button>
             </form>
           </div>
-          <div class="bg-slate-800 p-6 rounded-xl space-y-4 border border-slate-700">
-            <h2 class="text-base font-bold text-amber-400">Workers List</h2>
-            <div class="overflow-x-auto"><table class="w-full text-left text-sm">
+          <div class="bg-slate-800 p-4 rounded-xl space-y-3 border border-slate-700">
+            <h2 class="text-sm font-bold text-amber-400">Workers List</h2>
+            <div class="overflow-x-auto"><table class="w-full text-left text-xs">
               <thead><tr class="bg-slate-700 text-slate-300 border-b border-slate-600"><th class="p-2">ID</th><th class="p-2">Name</th><th class="p-2">Position</th><th class="p-2">Project</th><th class="p-2">Rate</th><th class="p-2">QR Code</th></tr></thead>
               <tbody id="worker-table" class="divide-y divide-slate-700"></tbody>
             </table></div>
           </div>
         </section>
 
-        <!-- TAB 3: ATTENDANCE -->
-        <section id="adm-attendance" class="hidden bg-slate-800 p-6 rounded-xl space-y-4 border border-slate-700">
-          <h2 class="text-base font-bold text-amber-400">Attendance Records</h2>
-          <div class="overflow-x-auto"><table class="w-full text-left text-sm">
+        <section id="adm-attendance" class="hidden bg-slate-800 p-4 rounded-xl space-y-3 border border-slate-700">
+          <h2 class="text-sm font-bold text-amber-400">Attendance Logs</h2>
+          <div class="overflow-x-auto"><table class="w-full text-left text-xs">
             <thead><tr class="bg-slate-700 text-slate-300 border-b border-slate-600"><th class="p-2">Worker Name</th><th class="p-2">Date</th><th class="p-2">Time In</th><th class="p-2">Time Out</th><th class="p-2">Status</th></tr></thead>
             <tbody id="attendance-table" class="divide-y divide-slate-700"></tbody>
           </table></div>
         </section>
 
-        <!-- TAB 4: ADVANCE MONEY -->
-        <section id="adm-advance" class="hidden space-y-4">
-          <div class="bg-slate-800 p-6 rounded-xl space-y-4 border border-slate-700">
-            <h2 class="text-base font-bold text-amber-400">Add Advance Money</h2>
-            <form onsubmit="addAdvance(event)" class="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <select id="adv-worker" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-sm"></select>
-              <input type="number" id="adv-amount" placeholder="Amount (₱)" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-sm">
-              <input type="text" id="adv-reason" placeholder="Reason (Optional)" class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-sm">
-              <button type="submit" class="bg-purple-600 hover:bg-purple-500 font-bold p-2 rounded col-span-full text-sm">Record Advance</button>
+        <section id="adm-advance" class="hidden space-y-3">
+          <div class="bg-slate-800 p-4 rounded-xl space-y-3 border border-slate-700">
+            <h2 class="text-sm font-bold text-amber-400">Add Advance Money</h2>
+            <form onsubmit="addAdvance(event)" class="grid grid-cols-1 md:grid-cols-3 gap-2">
+              <select id="adv-worker" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-xs"></select>
+              <input type="number" id="adv-amount" placeholder="Amount (₱)" required class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-xs">
+              <input type="text" id="adv-reason" placeholder="Reason (Optional)" class="bg-slate-700 border border-slate-600 p-2 rounded text-white text-xs">
+              <button type="submit" class="bg-purple-600 hover:bg-purple-500 font-bold p-2 rounded col-span-full text-xs">Record Advance</button>
             </form>
           </div>
-          <div class="bg-slate-800 p-6 rounded-xl space-y-4 border border-slate-700">
-            <h2 class="text-base font-bold text-amber-400">Advances History</h2>
-            <div class="overflow-x-auto"><table class="w-full text-left text-sm">
+          <div class="bg-slate-800 p-4 rounded-xl space-y-3 border border-slate-700">
+            <h2 class="text-sm font-bold text-amber-400">Advances History</h2>
+            <div class="overflow-x-auto"><table class="w-full text-left text-xs">
               <thead><tr class="bg-slate-700 text-slate-300 border-b border-slate-600"><th class="p-2">Worker</th><th class="p-2">Amount</th><th class="p-2">Reason</th><th class="p-2">Status</th><th class="p-2">Date</th></tr></thead>
               <tbody id="advance-table" class="divide-y divide-slate-700"></tbody>
             </table></div>
           </div>
         </section>
 
-        <!-- TAB 5: ANNOUNCEMENTS -->
-        <section id="adm-announce" class="hidden space-y-4">
-          <div class="bg-slate-800 p-6 rounded-xl space-y-4 border border-slate-700">
-            <h2 class="text-base font-bold text-amber-400">Post Announcement</h2>
-            <form onsubmit="postAnnouncement(event)" class="space-y-3">
-              <input type="text" id="ann-title" placeholder="Title" required class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white text-sm">
-              <textarea id="ann-msg" placeholder="Message for workers..." required class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white text-sm"></textarea>
-              <button type="submit" class="bg-blue-600 hover:bg-blue-500 font-bold p-2 rounded w-full text-sm">Publish Announcement</button>
+        <section id="adm-announce" class="hidden space-y-3">
+          <div class="bg-slate-800 p-4 rounded-xl space-y-3 border border-slate-700">
+            <h2 class="text-sm font-bold text-amber-400">Post Announcement</h2>
+            <form onsubmit="postAnnouncement(event)" class="space-y-2">
+              <input type="text" id="ann-title" placeholder="Title" required class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white text-xs">
+              <textarea id="ann-msg" placeholder="Message for workers..." required class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white text-xs"></textarea>
+              <button type="submit" class="bg-blue-600 hover:bg-blue-500 font-bold p-2 rounded w-full text-xs">Publish</button>
             </form>
           </div>
         </section>
 
-        <!-- TAB 6: SETTINGS -->
-        <section id="adm-settings" class="hidden bg-slate-800 p-6 rounded-xl space-y-4 border border-slate-700">
-          <h2 class="text-base font-bold text-amber-400">Company Customization Settings</h2>
-          <form onsubmit="saveSettings(event)" class="space-y-3">
-            <div><label class="text-xs text-slate-400">Company Name</label><input type="text" id="set-name" value="${company.company_name}" required class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white text-sm"></div>
-            <div><label class="text-xs text-slate-400">Company Logo URL</label><input type="text" id="set-logo" value="${company.logo_url}" placeholder="https://image-link.com/logo.png" class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white text-sm"></div>
-            <div><label class="text-xs text-slate-400">Address</label><input type="text" id="set-address" value="${company.address}" class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white text-sm"></div>
-            <div><label class="text-xs text-slate-400">Contact Number</label><input type="text" id="set-contact" value="${company.contact_number}" class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white text-sm"></div>
-            <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 font-bold p-2 rounded w-full text-sm">Save Changes</button>
+        <section id="adm-settings" class="hidden bg-slate-800 p-4 rounded-xl space-y-3 border border-slate-700">
+          <h2 class="text-sm font-bold text-amber-400">Company Settings</h2>
+          <form onsubmit="saveSettings(event)" class="space-y-2">
+            <div><label class="text-[10px] text-slate-400">Company Name</label><input type="text" id="set-name" value="${company.company_name}" required class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white text-xs"></div>
+            <div><label class="text-[10px] text-slate-400">Logo URL</label><input type="text" id="set-logo" value="${company.logo_url}" class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white text-xs"></div>
+            <div><label class="text-[10px] text-slate-400">Address</label><input type="text" id="set-address" value="${company.address}" class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white text-xs"></div>
+            <div><label class="text-[10px] text-slate-400">Contact Number</label><input type="text" id="set-contact" value="${company.contact_number}" class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-white text-xs"></div>
+            <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 font-bold p-2 rounded w-full text-xs">Save Changes</button>
           </form>
         </section>
-
       </div>
       <script>
         function switchAdminTab(tab) {
@@ -524,7 +495,7 @@ app.get('/admin', async (req, res) => {
           const tbody = document.getElementById('worker-table'); const select = document.getElementById('adv-worker');
           tbody.innerHTML = ''; select.innerHTML = '<option value="">Select Worker</option>';
           data.forEach(w => {
-            tbody.innerHTML += \`<tr><td class="p-2 font-bold text-amber-300">\${w.worker_id}</td><td class="p-2">\${w.full_name}</td><td class="p-2">\${w.position}</td><td class="p-2">\${w.assigned_project || '—'}</td><td class="p-2 text-emerald-400">₱\${w.daily_rate}</td><td class="p-2 font-mono text-xs">\${w.qr_code}</td></tr>\`;
+            tbody.innerHTML += \`<tr><td class="p-2 font-bold text-amber-300">\${w.worker_id}</td><td class="p-2">\${w.full_name}</td><td class="p-2">\${w.position}</td><td class="p-2">\${w.assigned_project || '—'}</td><td class="p-2 text-emerald-400">₱\${w.daily_rate}</td><td class="p-2 font-mono text-[11px]">\${w.qr_code}</td></tr>\`;
             select.innerHTML += \`<option value="\${w.worker_id}">\${w.full_name} (\${w.worker_id})</option>\`;
           });
         }
@@ -539,7 +510,7 @@ app.get('/admin', async (req, res) => {
             assigned_project: document.getElementById('wproject').value.trim()
           };
           const res = await fetch('/api/workers', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
-          if(res.ok) { alert('Worker Registered & QR Generated!'); location.reload(); }
+          if(res.ok) { alert('Worker Registered!'); location.reload(); }
         }
         async function loadAttendance() {
           const res = await fetch('/api/admin/attendance'); const data = await res.json();
@@ -571,7 +542,7 @@ app.get('/admin', async (req, res) => {
           e.preventDefault();
           const body = { company_name: document.getElementById('set-name').value, logo_url: document.getElementById('set-logo').value, address: document.getElementById('set-address').value, contact_number: document.getElementById('set-contact').value };
           const res = await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
-          if(res.ok) { alert('Company Settings Updated!'); location.reload(); }
+          if(res.ok) { alert('Settings Updated!'); location.reload(); }
         }
         loadDashboardStats();
       </script>
@@ -580,7 +551,7 @@ app.get('/admin', async (req, res) => {
   `);
 });
 
-// 3. WORKER PORTAL ( /worker )
+// ================= 3. WORKER PORTAL ( /worker ) =================
 app.get('/worker', async (req, res) => {
   const company = await getCompanyInfo();
   res.send(`
@@ -591,20 +562,16 @@ app.get('/worker', async (req, res) => {
       <title>${company.company_name} - Worker Portal</title>
       <script src="https://cdn.tailwindcss.com"></script>
     </head>
-    <body class="bg-slate-900 text-white min-h-screen p-4 flex flex-col items-center justify-center">
-      <div class="max-w-md w-full bg-slate-800 p-6 rounded-2xl shadow-xl space-y-4 text-center border border-slate-700">
-        <div class="flex justify-between items-center mb-2">
-          <a href="/" class="text-xs bg-slate-700 px-2 py-1 rounded">← Scanner</a>
-          <a href="/admin" class="text-xs bg-slate-700 px-2 py-1 rounded">Admin →</a>
-        </div>
-        ${company.logo_url ? `<img src="${company.logo_url}" class="w-12 h-12 rounded-full object-cover mx-auto border-2 border-purple-400">` : '👷'}
-        <h1 class="text-lg font-bold text-purple-400">${company.company_name}</h1>
-        <p class="text-xs text-slate-400">ILAGAY ANG WORKER ID</p>
+    <body class="bg-slate-900 text-white min-h-screen p-3 flex flex-col items-center justify-center">
+      <div class="max-w-md w-full bg-slate-800 p-5 rounded-2xl shadow-xl space-y-3 text-center border border-slate-700">
+        ${company.logo_url ? `<img src="${company.logo_url}" class="w-10 h-10 rounded-full object-cover mx-auto border-2 border-purple-400">` : '👷'}
+        <h1 class="text-base font-bold text-purple-400">${company.company_name}</h1>
+        <p class="text-[10px] text-slate-400">ILAGAY ANG WORKER ID</p>
         <div class="flex gap-2">
-          <input type="text" id="worker-id-input" placeholder="e.g. W-001" class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-center font-bold uppercase text-white text-sm">
-          <button onclick="checkWorker()" class="bg-purple-600 hover:bg-purple-500 px-4 rounded font-bold text-sm">Login</button>
+          <input type="text" id="worker-id-input" placeholder="e.g. W-001" class="bg-slate-700 border border-slate-600 p-2 rounded w-full text-center font-bold uppercase text-white text-xs">
+          <button onclick="checkWorker()" class="bg-purple-600 hover:bg-purple-500 px-3 rounded font-bold text-xs">Login</button>
         </div>
-        <div id="worker-dashboard" class="hidden text-left space-y-3 mt-4 bg-slate-700/40 p-4 rounded-xl text-sm border border-slate-600"></div>
+        <div id="worker-dashboard" class="hidden text-left space-y-2 mt-3 bg-slate-700/40 p-3 rounded-xl text-xs border border-slate-600"></div>
       </div>
       <script>
         async function checkWorker() {
@@ -615,29 +582,29 @@ app.get('/worker', async (req, res) => {
           const box = document.getElementById('worker-dashboard');
           box.classList.remove('hidden');
           if(res.ok) {
-            let attStatus = '<span class="text-red-400 font-bold">ABSENT / WALA PA</span>';
+            let attStatus = '<span class="text-red-400 font-bold">WALA PA / ABSENT</span>';
             if(data.today_attendance) {
-              attStatus = \`<span class="text-emerald-400 font-bold">PRESENT (In: \${new Date(data.today_attendance.time_in).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} \${data.today_attendance.time_out ? '/ Out: ' + new Date(data.today_attendance.time_out).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : ''})</span>\`;
+              attStatus = \`<span class="text-emerald-400 font-bold">PRESENT (In: \${new Date(data.today_attendance.time_in).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})})</span>\`;
             }
             
             let annHTML = '';
             if(data.announcements.length > 0) {
-              annHTML = '<div class="mt-2 p-2 bg-slate-800 rounded border border-slate-600"><div class="font-bold text-amber-400 text-xs">📢 ' + data.announcements[0].title + '</div><div class="text-[11px] text-slate-300">' + data.announcements[0].message + '</div></div>';
+              annHTML = '<div class="mt-2 p-2 bg-slate-800 rounded border border-slate-600"><div class="font-bold text-amber-400 text-[11px]">📢 ' + data.announcements[0].title + '</div><div class="text-[10px] text-slate-300">' + data.announcements[0].message + '</div></div>';
             }
 
             box.innerHTML = \`
               <div class="text-center pb-2 border-b border-slate-600">
-                <div class="font-extrabold text-amber-300 text-base">WELCOME, \{data.worker.full_name}</div>
-                <div class="text-xs text-slate-300">Position: \${data.worker.position} | ID: \${data.worker.worker_id}</div>
+                <div class="font-extrabold text-amber-300 text-sm">\${data.worker.full_name}</div>
+                <div class="text-[10px] text-slate-300">\${data.worker.position} | ID: \${data.worker.worker_id}</div>
               </div>
-              <div><b>Today Status:</b> \${attStatus}</div>
+              <div><b>Today:</b> \${attStatus}</div>
               <div><b>Daily Rate:</b> ₱\${data.worker.daily_rate}</div>
-              <div><b>Total Salary:</b> ₱\${data.salary.total_salary.toLocaleString()} (<span class="text-xs text-slate-400">\${data.salary.days_worked} days</span>)</div>
+              <div><b>Total Salary:</b> ₱\${data.salary.total_salary.toLocaleString()} (\${data.salary.days_worked} days)</div>
               <div><b>Advance Deducted:</b> ₱\${data.salary.advance.toLocaleString()}</div>
-              <div class="font-bold text-emerald-400 text-base">NET SALARY: ₱\${data.salary.net_salary.toLocaleString()}</div>
-              <div class="text-center pt-2">
-                <p class="text-xs text-slate-400 mb-1">YOUR QR CODE:</p>
-                <div class="bg-white p-3 inline-block rounded-lg text-slate-900 font-mono font-black text-lg tracking-widest">\${data.worker.qr_code}</div>
+              <div class="font-bold text-emerald-400 text-sm">NET SALARY: ₱\${data.salary.net_salary.toLocaleString()}</div>
+              <div class="text-center pt-1">
+                <p class="text-[10px] text-slate-400 mb-1">QR CODE ID:</p>
+                <div class="bg-white p-2 inline-block rounded text-slate-900 font-mono font-black text-sm tracking-widest">\${data.worker.qr_code}</div>
               </div>
               \${annHTML}
             \`;
