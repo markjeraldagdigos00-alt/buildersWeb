@@ -41,12 +41,6 @@ async function ensureTables() {
         id SERIAL PRIMARY KEY,
         worker_id VARCHAR(50) NOT NULL,
         date DATE DEFAULT CURRENT_DATE,
-        time_in_am TIMESTAMP,
-        time_out_am TIMESTAMP,
-        time_in_pm TIMESTAMP,
-        time_out_pm TIMESTAMP,
-        time_in TIMESTAMP,
-        time_out TIMESTAMP,
         status VARCHAR(20) DEFAULT 'Present'
       );
 
@@ -114,6 +108,14 @@ async function ensureTables() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+
+    // Siguraduhing nandoon ang lahat ng attendance columns kahit luma na ang table
+    await pool.query(`ALTER TABLE attendance ADD COLUMN IF NOT EXISTS time_in_am TIMESTAMP;`);
+    await pool.query(`ALTER TABLE attendance ADD COLUMN IF NOT EXISTS time_out_am TIMESTAMP;`);
+    await pool.query(`ALTER TABLE attendance ADD COLUMN IF NOT EXISTS time_in_pm TIMESTAMP;`);
+    await pool.query(`ALTER TABLE attendance ADD COLUMN IF NOT EXISTS time_out_pm TIMESTAMP;`);
+    await pool.query(`ALTER TABLE attendance ADD COLUMN IF NOT EXISTS time_in TIMESTAMP;`);
+    await pool.query(`ALTER TABLE attendance ADD COLUMN IF NOT EXISTS time_out TIMESTAMP;`);
 
     const compCheck = await pool.query('SELECT * FROM company_settings LIMIT 1');
     if (compCheck.rows.length === 0) {
@@ -458,6 +460,7 @@ app.get('/admin', async (req, res) => {
     </head>
     <body class="bg-slate-900 text-white min-h-screen flex flex-col md:flex-row">
       
+      <!-- SIDEBAR NAVIGATION -->
       <aside class="w-full md:w-64 bg-slate-800 border-r border-slate-700 flex-shrink-0 p-4 space-y-4">
         <div class="flex items-center gap-3 border-b border-slate-700 pb-3">
           ${company.logo_url ? `<img src="${company.logo_url}" class="w-8 h-8 rounded-full object-cover border border-amber-400">` : '🏗️'}
@@ -485,8 +488,10 @@ app.get('/admin', async (req, res) => {
         </nav>
       </aside>
 
+      <!-- MAIN CONTENT AREA -->
       <main class="flex-1 p-4 overflow-y-auto">
         
+        <!-- 1. DASHBOARD -->
         <section id="adm-dash" class="space-y-4">
           <h2 class="text-base font-bold text-amber-400">🏠 Dashboard Overview</h2>
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
@@ -497,6 +502,7 @@ app.get('/admin', async (req, res) => {
           </div>
         </section>
 
+        <!-- 2. WORKERS -->
         <section id="adm-workers" class="hidden space-y-4">
           <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
             <h2 class="text-sm font-bold text-amber-400">👷 Add / Update Worker</h2>
@@ -519,6 +525,7 @@ app.get('/admin', async (req, res) => {
           </div>
         </section>
 
+        <!-- 3. QR ATTENDANCE -->
         <section id="adm-qr" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">📱 QR Attendance Logs</h2>
           <div class="overflow-x-auto"><table class="w-full text-left text-xs">
@@ -527,21 +534,25 @@ app.get('/admin', async (req, res) => {
           </table></div>
         </section>
 
+        <!-- 4. PROJECTS -->
         <section id="adm-projects" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">🏢 Projects Management</h2>
           <p class="text-xs text-slate-400">Manage site locations and active construction projects.</p>
         </section>
 
+        <!-- 5. SCHEDULES -->
         <section id="adm-schedules" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">🕒 Work Schedules</h2>
           <p class="text-xs text-slate-400">Set standard work shifts and overtime schedules.</p>
         </section>
 
+        <!-- 6. PAYROLL -->
         <section id="adm-payroll" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">💰 Payroll Processing</h2>
           <p class="text-xs text-slate-400">Compute total salaries, deductions, and weekly payslips.</p>
         </section>
 
+        <!-- 7. CASH ADVANCE -->
         <section id="adm-advance" class="hidden space-y-4">
           <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
             <h2 class="text-sm font-bold text-amber-400">💵 Add Cash Advance</h2>
@@ -561,11 +572,13 @@ app.get('/admin', async (req, res) => {
           </div>
         </section>
 
+        <!-- 8. LEAVE REQUESTS -->
         <section id="adm-leave" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">📝 Leave Requests</h2>
           <p class="text-xs text-slate-400">Approve or reject leave applications from workers.</p>
         </section>
 
+        <!-- 9. ANNOUNCEMENTS -->
         <section id="adm-announce" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">📢 Post Announcements</h2>
           <form onsubmit="postAnnouncement(event)" class="space-y-2">
@@ -575,27 +588,32 @@ app.get('/admin', async (req, res) => {
           </form>
         </section>
 
+        <!-- 10. SAFETY MANAGEMENT -->
         <section id="adm-safety" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">🦺 Safety Management</h2>
           <p class="text-xs text-slate-400">Safety compliance, incident reports, and PPE tracking.</p>
         </section>
 
+        <!-- 11. EQUIPMENT -->
         <section id="adm-equipment" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">📦 Equipment & Tools</h2>
           <p class="text-xs text-slate-400">Track heavy equipment and borrowed tools per site.</p>
         </section>
 
+        <!-- 12. REPORTS -->
         <section id="adm-reports" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">📄 System Reports</h2>
           <p class="text-xs text-slate-400">Export attendance summary, payroll, and advance logs.</p>
           <button onclick="alert('Export feature ready.')" class="bg-slate-700 hover:bg-slate-600 border border-slate-600 px-3 py-2 rounded text-xs font-bold">📥 Export PDF / CSV Summary</button>
         </section>
 
+        <!-- 13. USER MANAGEMENT -->
         <section id="adm-users" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">👤 User Management</h2>
           <p class="text-xs text-slate-400">Manage admin roles and gate scanner credentials.</p>
         </section>
 
+        <!-- 14. SETTINGS -->
         <section id="adm-settings" class="hidden bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-3">
           <h2 class="text-sm font-bold text-amber-400">⚙️ Company Settings</h2>
           <form onsubmit="saveSettings(event)" class="space-y-2">
@@ -746,6 +764,7 @@ app.get('/worker', async (req, res) => {
     <body class="bg-slate-900 text-white min-h-screen p-3 flex flex-col items-center justify-center">
       <div class="max-w-md w-full bg-slate-800 p-5 rounded-2xl shadow-xl space-y-4 border border-slate-700">
         
+        <!-- LOGIN SCREEN -->
         <div id="login-screen" class="space-y-3 text-center">
           ${company.logo_url ? `<img src="${company.logo_url}" class="w-12 h-12 rounded-full object-cover mx-auto border-2 border-purple-400">` : '👷'}
           <h1 class="text-base font-bold text-purple-400">${company.company_name}</h1>
@@ -757,6 +776,7 @@ app.get('/worker', async (req, res) => {
           <div id="login-error" class="text-red-400 text-xs font-bold hidden"></div>
         </div>
 
+        <!-- DASHBOARD CONTAINER -->
         <div id="worker-dashboard" class="hidden space-y-4">
           
           <div class="text-center pb-3 border-b border-slate-700 flex items-center justify-between">
@@ -772,6 +792,7 @@ app.get('/worker', async (req, res) => {
             </div>
           </div>
 
+          <!-- WORKER TABS -->
           <div id="tab-home" class="worker-tab space-y-3">
             <div class="bg-slate-700/50 p-4 rounded-xl border border-slate-600 text-center space-y-2">
               <div class="text-xs text-slate-400 font-semibold uppercase">Today's Attendance Status</div>
@@ -823,6 +844,7 @@ app.get('/worker', async (req, res) => {
             <div id="w-announcements-list" class="space-y-2 max-h-48 overflow-y-auto"></div>
           </div>
 
+          <!-- WORKER BOTTOM MENU -->
           <div class="grid grid-cols-6 gap-1 pt-2 border-t border-slate-700 text-[10px]">
             <button onclick="switchWorkerTab('home')" class="worker-nav-btn bg-purple-600 text-white font-bold p-1.5 rounded text-center">🏠<br>Home</button>
             <button onclick="switchWorkerTab('qr')" class="worker-nav-btn bg-slate-700 text-slate-300 p-1.5 rounded text-center">📱<br>QR</button>
