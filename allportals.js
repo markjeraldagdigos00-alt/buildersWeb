@@ -19,7 +19,7 @@ app.use(session({
   secret: process.env.SESSION_SECRET || 'construction_system_secret_key',
   resave: false,
   saveUninitialized: false,
-  cookie: { secure: false } // Set to true if using HTTPS in production
+  cookie: { secure: false }
 }));
 
 // Initialize Database Tables & Default Settings
@@ -57,7 +57,7 @@ async function initDB() {
         worker_id VARCHAR(50) NOT NULL,
         date DATE NOT NULL,
         time TIME NOT NULL,
-        attendance_type VARCHAR(10) NOT NULL, -- 'IN' or 'OUT'
+        attendance_type VARCHAR(10) NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
@@ -96,13 +96,11 @@ async function initDB() {
       );
     `);
 
-    // Insert default company settings if none exist
     const companyCheck = await pool.query('SELECT * FROM company_settings LIMIT 1');
     if (companyCheck.rows.length === 0) {
       await pool.query(`INSERT INTO company_settings (company_name, company_logo, company_address, contact_number) VALUES ('BuildCorp Construction', '', '123 Construction Ave', '+1 234 567 8900')`);
     }
 
-    // Insert default work schedule if none exists
     const scheduleCheck = await pool.query('SELECT * FROM work_schedules LIMIT 1');
     if (scheduleCheck.rows.length === 0) {
       await pool.query(`INSERT INTO work_schedules (morning_start, morning_end, afternoon_start, afternoon_end, full_day_hours, half_day_hours) VALUES ('07:00', '12:00', '13:00', '17:00', 8.00, 4.00)`);
@@ -115,13 +113,11 @@ async function initDB() {
 }
 initDB();
 
-// Helper: Get Company Settings
 async function getCompanySettings() {
   const res = await pool.query('SELECT * FROM company_settings LIMIT 1');
   return res.rows[0] || { company_name: 'BuildCorp', company_logo: '', company_address: '', contact_number: '' };
 }
 
-// Middleware for Role Authorization
 function requireRole(role) {
   return (req, res, next) => {
     if (!req.session.user || req.session.user.role !== role) {
@@ -134,7 +130,6 @@ function requireRole(role) {
   };
 }
 
-// Error Page Template
 function renderErrorPage(message) {
   return `
     <!DOCTYPE html>
@@ -235,7 +230,7 @@ app.get('/setup', async (req, res) => {
         h2 { color: #2c3e50; margin-bottom: 25px; text-align: center; }
         .form-group { margin-bottom: 15px; }
         label { display: block; margin-bottom: 5px; font-weight: 600; font-size: 14px; color: #555; }
-        input { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+        input { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box; }
         button { width: 100%; padding: 12px; background: #e67e22; color: white; border: none; border-radius: 6px; font-size: 16px; font-weight: bold; cursor: pointer; margin-top: 10px; }
         button:hover { background: #d35400; }
         .error { color: #e74c3c; margin-bottom: 15px; text-align: center; font-size: 14px; }
@@ -381,7 +376,6 @@ function sendLoginPage(res, company, title, portalUrl) {
       <div class="card">
         ${company.company_logo ? `<img src="${company.company_logo}" alt="Logo" class="logo">` : ''}
         <h2>${title}</h2>
-        ${portalUrl === '/admin' ? '<p style="font-size:12px; color:#666; margin-bottom:15px;">(Default first admin can login with credentials created during setup)</p>' : ''}
         <form action="${portalUrl}" method="POST">
           <div class="form-group">
             <label>Username or Email</label>
@@ -407,7 +401,7 @@ async function handleLogin(req, res, expectedRole, successRedirect, failUrl) {
     if (userResult.rows.length === 0) {
       return res.send(renderErrorPage('Invalid username or password. <a href="' + failUrl + '">Try Again</a>'));
     }
-    const user = userResult.rows.resize ? userResult.rows[0] : userResult.rows[0];
+    const user = userResult.rows[0];
     const match = await bcrypt.compare(password, user.password_hash);
     if (!match) {
       return res.send(renderErrorPage('Invalid username or password. <a href="' + failUrl + '">Try Again</a>'));
@@ -446,7 +440,6 @@ app.get('/admin/dashboard', async (req, res) => {
   const presentToday = await pool.query('SELECT COUNT(DISTINCT worker_id) FROM attendance_logs WHERE date = $1', [todayStr]);
   const recentLogs = await pool.query('SELECT al.*, w.full_name, w.position FROM attendance_logs al JOIN workers w ON al.worker_id = w.worker_id ORDER BY al.created_at DESC LIMIT 10');
 
-  // Full day vs half day estimation for today
   const workersList = await pool.query('SELECT worker_id FROM workers WHERE is_active = TRUE');
   const scheduleRes = await pool.query('SELECT * FROM work_schedules LIMIT 1');
   const schedule = scheduleRes.rows[0];
@@ -595,11 +588,9 @@ app.post('/admin/workers/register', async (req, res) => {
     );
     const userId = userRes.rows[0].id;
 
-    // Generate unique worker ID
     const countRes = await pool.query('SELECT COUNT(*) FROM workers');
     const workerId = `W-${String(parseInt(countRes.rows[0].count) + 1).padStart(3, '0')}`;
 
-    // Generate QR Code URL via QR Server API
     const qrData = JSON.stringify({ worker_id: workerId, name: full_name });
     const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(qrData)}`;
 
@@ -788,11 +779,9 @@ app.get('/admin/salary', async (req, res) => {
 
   let salaryData = [];
   for (let w of workers.rows) {
-    // Get all attendance logs for this worker
     const logsRes = await pool.query('SELECT * FROM attendance_logs WHERE worker_id = $1 ORDER BY date ASC, time ASC', [w.worker_id]);
     const logs = logsRes.rows;
 
-    // Group logs by date
     const grouped = {};
     logs.forEach(l => {
       const d = l.date.toISOString().split('T')[0];
@@ -811,7 +800,6 @@ app.get('/admin/salary', async (req, res) => {
     const equivalentDays = fullDays + (halfDays * 0.5);
     const totalSalary = equivalentDays * parseFloat(w.daily_rate);
 
-    // Get total advance
     const advRes = await pool.query('SELECT SUM(amount) as total FROM advance_money WHERE worker_id = $1', [w.worker_id]);
     const totalAdvance = parseFloat(advRes.rows[0].total || 0);
     const netSalary = totalSalary - totalAdvance;
@@ -989,7 +977,6 @@ app.post('/admin/schedule', async (req, res) => {
   res.redirect('/admin/schedule');
 });
 
-// Admin Layout Template
 function renderAdminLayout(title, company, user, content) {
   return `
     <!DOCTYPE html>
@@ -1027,7 +1014,7 @@ function renderAdminLayout(title, company, user, content) {
         .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
         .form-group { display: flex; flex-direction: column; gap: 8px; }
         .form-group label { font-weight: 600; font-size: 14px; color: #555; }
-        .form-group input, .form-group textarea { padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+        .form-group input, .form-group textarea { padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box; }
       </style>
     </head>
     <body>
@@ -1123,7 +1110,6 @@ app.get('/worker/attendance', async (req, res) => {
   const scheduleRes = await pool.query('SELECT * FROM work_schedules LIMIT 1');
   const schedule = scheduleRes.rows[0];
 
-  // Group by date
   const grouped = {};
   logsRes.rows.forEach(l => {
     const d = l.date.toISOString().split('T')[0];
@@ -1443,7 +1429,6 @@ app.post('/scanner/api/record', async (req, res) => {
   const logsRes = await pool.query('SELECT * FROM attendance_logs WHERE worker_id = $1 AND date = $2 ORDER BY time ASC', [worker_id, todayStr]);
   const logs = logsRes.rows;
 
-  // Validate Sequence
   if (logs.length === 0 && attendance_type === 'OUT') {
     return res.json({ success: false, error: 'Cannot Record OUT as First Attendance' });
   }
@@ -1587,10 +1572,7 @@ function calculateWorkingHours(logs) {
 function calculateAttendanceStatus(logs, schedule) {
   if (!logs || logs.length === 0) return 'ABSENT';
   
-  // Check if complete IN/OUT pairs exist
-  let hasIncomplete = false;
   let workingHours = parseFloat(calculateWorkingHours(logs));
-
   const hasOut = logs.some(l => l.attendance_type === 'OUT');
   if (!hasOut && logs.length > 0) return 'INCOMPLETE';
 
