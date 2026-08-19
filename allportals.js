@@ -122,9 +122,29 @@ async function initDB() {
 initDB();
 
 // Helper: Get Settings
-async function getCompanySettings() {
-  const res = await pool.query('SELECT * FROM company_settings LIMIT 1');
-  return res.rows[0] || { company_name: 'Apex Builder', company_logo: '', company_address: '', contact_number: '' };
+async function initDB() {
+  const client = await pool.connect();
+  try {
+    // 1. I-drop muna ang lumang table para masigurong malinis at bago ang structure
+    await client.query(`DROP TABLE IF EXISTS attendance_logs CASCADE;`);
+
+    // 2. Sundan ito ng iyong orihinal na CREATE TABLE code para sa attendance_logs
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS attendance_logs (
+        id SERIAL PRIMARY KEY,
+        worker_id INT,
+        attendance_date DATE, -- Narito na ang bagong kolumn na hinahanap nito
+        attendance_type VARCHAR(50),
+        -- ... isama ang iba pang kolumn ng attendance_logs mo dito kung meron pa ...
+      );
+    `);
+
+    console.log('Database initialized successfully.');
+  } catch (err) {
+    console.error('Error initializing database:', err);
+  } finally {
+    client.release();
+  }
 }
 
 // ---------------------------------------------------------
