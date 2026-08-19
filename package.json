@@ -2,9 +2,11 @@
   "name": "construction-inventory-system",
   "version": "1.0.0",
   "description": "Complete Construction Worker and Inventory Management System",
-  "main": "server.js",
+  "main": "allportals.js
+",
   "scripts": {
-    "start": "node server.js"
+    "start": "node allportals.js
+"
   },
   "dependencies": {
     "express": "^4.19.2",
