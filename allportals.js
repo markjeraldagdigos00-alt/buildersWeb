@@ -17,91 +17,62 @@ async function initDB() {
   const client = await pool.connect();
   try {
     await client.query(`
-      CREATE TABLE IF NOT EXISTS company_settings (
-        id SERIAL PRIMARY KEY,
-        company_name VARCHAR(255) DEFAULT 'Apex Construction Co.',
-        company_logo TEXT DEFAULT '',
-        company_address VARCHAR(255) DEFAULT '123 Builder St, Construction City',
-        contact_number VARCHAR(50) DEFAULT '555-0199'
-      );
+  CREATE TABLE IF NOT EXISTS announcements (
+    id SERIAL PRIMARY KEY,
+    title VARCHAR(255) NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+  ALTER TABLE announcements ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 
-      CREATE TABLE IF NOT EXISTS work_schedules (
-        id SERIAL PRIMARY KEY,
-        morning_start VARCHAR(10) DEFAULT '07:00',
-        morning_end VARCHAR(10) DEFAULT '12:00',
-        afternoon_start VARCHAR(10) DEFAULT '13:00',
-        afternoon_end VARCHAR(10) DEFAULT '17:00',
-        full_day_hours NUMERIC(4,2) DEFAULT 9.00,
-        half_day_hours NUMERIC(4,2) DEFAULT 5.00
-      );
+  CREATE TABLE IF NOT EXISTS workers (
+    id SERIAL PRIMARY KEY,
+    worker_id VARCHAR(50) UNIQUE NOT NULL,
+    full_name VARCHAR(255) NOT NULL,
+    position VARCHAR(100) NOT NULL,
+    contact_number VARCHAR(50),
+    daily_rate NUMERIC(10,2) DEFAULT 0.00,
+    assigned_project VARCHAR(255),
+    profile_picture TEXT,
+    status VARCHAR(20) DEFAULT 'Active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+  ALTER TABLE workers ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 
-      CREATE TABLE IF NOT EXISTS workers (
-        id SERIAL PRIMARY KEY,
-        worker_id VARCHAR(50) UNIQUE NOT NULL,
-        full_name VARCHAR(255) NOT NULL,
-        position VARCHAR(100) NOT NULL,
-        contact_number VARCHAR(50),
-        daily_rate NUMERIC(10,2) DEFAULT 0.00,
-        assigned_project VARCHAR(255),
-        profile_picture TEXT,
-        status VARCHAR(20) DEFAULT 'Active',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
+  CREATE TABLE IF NOT EXISTS attendance_logs (
+    id SERIAL PRIMARY KEY,
+    worker_id VARCHAR(50) NOT NULL,
+    attendance_date DATE NOT NULL,
+    attendance_time TIME NOT NULL,
+    attendance_type VARCHAR(10) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+  ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 
-      CREATE TABLE IF NOT EXISTS qr_codes (
-        id SERIAL PRIMARY KEY,
-        worker_id VARCHAR(50) UNIQUE NOT NULL,
-        qr_data TEXT NOT NULL
-      );
+  CREATE TABLE IF NOT EXISTS stock_transactions (
+    id SERIAL PRIMARY KEY,
+    material_id INT,
+    transaction_type VARCHAR(10) NOT NULL,
+    quantity NUMERIC(10,2) NOT NULL,
+    stock_after NUMERIC(10,2) NOT NULL,
+    reference_info VARCHAR(255),
+    purpose VARCHAR(255),
+    notes TEXT,
+    recorded_from VARCHAR(50),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+  ALTER TABLE stock_transactions ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 
-      CREATE TABLE IF NOT EXISTS attendance_logs (
-        id SERIAL PRIMARY KEY,
-        worker_id VARCHAR(50) NOT NULL,
-        attendance_date DATE NOT NULL,
-        attendance_time TIME NOT NULL,
-        attendance_type VARCHAR(10) NOT NULL, -- IN or OUT
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-
-      CREATE TABLE IF NOT EXISTS materials (
-        id SERIAL PRIMARY KEY,
-        material_name VARCHAR(255) NOT NULL,
-        category VARCHAR(100),
-        unit VARCHAR(50),
-        current_quantity NUMERIC(10,2) DEFAULT 0,
-        minimum_stock_level NUMERIC(10,2) DEFAULT 5,
-        notes TEXT
-      );
-
-      CREATE TABLE IF NOT EXISTS stock_transactions (
-        id SERIAL PRIMARY KEY,
-        material_id INT,
-        transaction_type VARCHAR(10) NOT NULL, -- IN or OUT
-        quantity NUMERIC(10,2) NOT NULL,
-        stock_after NUMERIC(10,2) NOT NULL,
-        reference_info VARCHAR(255),
-        purpose VARCHAR(255),
-        notes TEXT,
-        recorded_from VARCHAR(50),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-
-      CREATE TABLE IF NOT EXISTS advance_money (
-        id SERIAL PRIMARY KEY,
-        worker_id VARCHAR(50) NOT NULL,
-        amount NUMERIC(10,2) NOT NULL,
-        advance_date DATE NOT NULL,
-        notes TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-
-      CREATE TABLE IF NOT EXISTS announcements (
-        id SERIAL PRIMARY KEY,
-        title VARCHAR(255) NOT NULL,
-        content TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
+  CREATE TABLE IF NOT EXISTS advance_money (
+    id SERIAL PRIMARY KEY,
+    worker_id VARCHAR(50) NOT NULL,
+    amount NUMERIC(10,2) NOT NULL,
+    advance_date DATE NOT NULL,
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+  ALTER TABLE advance_money ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+`);
 
     // Insert defaults if empty
     const settingsCheck = await client.query('SELECT * FROM company_settings WHERE id = 1');
