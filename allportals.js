@@ -2,7 +2,7 @@ const express = require('express');
 const { Pool } = require('pg');
 
 const app = express();
-const PORT = process.env.PORT || 1000;
+const PORT = process.env.PORT || 5432;
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
